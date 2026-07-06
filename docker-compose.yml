@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: amana-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: amana
+      POSTGRES_PASSWORD: amana
+      POSTGRES_DB: amana
+    volumes:
+      - amana_pg_data:/var/lib/postgresql/data
+
+volumes:
+  amana_pg_data:

@@ -1,0 +1,83 @@
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+  UpdateDateColumn,
+} from 'typeorm';
+import { User } from '../users/user.entity';
+
+export type InvoiceStatus =
+  | 'pending'
+  | 'payment_initiated'
+  | 'paid_in_escrow'
+  | 'disputed'
+  | 'released'
+  | 'paid'
+  | 'cancelled';
+
+@Entity('invoices')
+export class Invoice {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ name: 'invoice_number', type: 'varchar', unique: true })
+  invoiceNumber: string;
+
+  @Column({ name: 'seller_id', type: 'uuid' })
+  sellerId: string;
+
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'seller_id' })
+  seller: User;
+
+  @Column({ name: 'buyer_email', type: 'varchar' })
+  buyerEmail: string;
+
+  @Column({ name: 'buyer_name', type: 'varchar', nullable: true })
+  buyerName: string | null;
+
+  @Column({ type: 'decimal', precision: 14, scale: 2 })
+  amount: string;
+
+  @Column({ type: 'varchar', default: 'NGN' })
+  currency: string;
+
+  @Column({ type: 'text', nullable: true })
+  description: string | null;
+
+  @Column({ type: 'varchar', default: 'pending' })
+  status: InvoiceStatus;
+
+  @Column({ name: 'payment_reference', type: 'varchar', unique: true })
+  paymentReference: string;
+
+  @Column({ name: 'share_token', type: 'varchar', unique: true })
+  shareToken: string;
+
+  @Column({ name: 'due_date', type: 'date', nullable: true })
+  dueDate: Date | null;
+
+  @Column({ name: 'payment_initiated_at', type: 'timestamptz', nullable: true })
+  paymentInitiatedAt: Date | null;
+
+  @Column({ name: 'paid_at', type: 'timestamptz', nullable: true })
+  paidAt: Date | null;
+
+  @Column({ name: 'escrowed_at', type: 'timestamptz', nullable: true })
+  escrowedAt: Date | null;
+
+  @Column({ name: 'buyer_confirmed_at', type: 'timestamptz', nullable: true })
+  buyerConfirmedAt: Date | null;
+
+  @Column({ name: 'released_at', type: 'timestamptz', nullable: true })
+  releasedAt: Date | null;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+}
