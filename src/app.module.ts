@@ -18,6 +18,17 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { User } from './users/user.entity';
 import { UsersModule } from './users/users.module';
+import { buildTypeOrmConfig } from './config/database.config';
+
+const databaseEntities = [
+  User,
+  RevokedToken,
+  VirtualAccount,
+  BvnVerification,
+  Invoice,
+  Notification,
+  Dispute,
+];
 
 @Module({
   imports: [
@@ -25,16 +36,8 @@ import { UsersModule } from './users/users.module';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DATABASE_HOST', 'localhost'),
-        port: configService.get<number>('DATABASE_PORT', 5432),
-        username: configService.get<string>('DATABASE_USER', 'amana'),
-        password: configService.get<string>('DATABASE_PASSWORD', 'amana'),
-        database: configService.get<string>('DATABASE_NAME', 'amana'),
-        entities: [User, RevokedToken, VirtualAccount, BvnVerification, Invoice, Notification, Dispute],
-        synchronize: true,
-      }),
+      useFactory: (configService: ConfigService) =>
+        buildTypeOrmConfig(configService, databaseEntities),
     }),
     UsersModule,
     AuthModule,

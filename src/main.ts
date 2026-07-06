@@ -1,12 +1,17 @@
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { createCorsOriginChecker } from './config/cors.config';
+import { logDatabaseTarget } from './config/database.config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
+  logDatabaseTarget(configService);
 
   app.enableCors({
-    origin: process.env.FRONTEND_URL ?? 'http://localhost:3000',
+    origin: createCorsOriginChecker(configService),
     credentials: true,
   });
 

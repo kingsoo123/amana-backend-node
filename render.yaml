@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: amana-api
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://payonce.netlify.app
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: DATABASE_SYNCHRONIZE
+        value: "true"
+      - key: ALLOW_NETLIFY_PREVIEWS
+        value: "true"
