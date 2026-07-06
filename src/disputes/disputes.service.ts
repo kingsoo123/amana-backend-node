@@ -76,6 +76,9 @@ export class DisputesService {
       sellerResponseDueAt: deadlines.sellerResponseDueAt,
       platformReviewDueAt: deadlines.platformReviewDueAt,
       decisionDueAt: deadlines.decisionDueAt,
+      raisedLatitude: dto.latitude ?? null,
+      raisedLongitude: dto.longitude ?? null,
+      raisedLocationAccuracy: dto.locationAccuracy ?? null,
     });
 
     invoice.status = 'disputed';
@@ -249,6 +252,23 @@ export class DisputesService {
     };
   }
 
+  private toRaisedLocationResponse(dispute: Dispute) {
+    if (
+      dispute.raisedLatitude == null ||
+      dispute.raisedLongitude == null ||
+      !Number.isFinite(dispute.raisedLatitude) ||
+      !Number.isFinite(dispute.raisedLongitude)
+    ) {
+      return null;
+    }
+
+    return {
+      latitude: dispute.raisedLatitude,
+      longitude: dispute.raisedLongitude,
+      accuracy: dispute.raisedLocationAccuracy,
+    };
+  }
+
   private toResponse(dispute: Dispute) {
     const invoice = dispute.invoice;
     const seller = invoice?.seller;
@@ -264,6 +284,7 @@ export class DisputesService {
       updatedAt: dispute.updatedAt,
       resolvedAt: dispute.resolvedAt,
       deadlines: this.toDeadlineResponse(dispute),
+      raisedLocation: this.toRaisedLocationResponse(dispute),
       invoice: invoice
         ? {
             id: invoice.id,

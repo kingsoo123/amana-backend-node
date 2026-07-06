@@ -74,6 +74,27 @@ export class Dispute {
   @Column({ name: 'decision_due_at', type: 'timestamptz', nullable: true })
   decisionDueAt: Date | null;
 
+  @Column({
+    name: 'raised_latitude',
+    type: 'double precision',
+    nullable: true,
+  })
+  raisedLatitude: number | null;
+
+  @Column({
+    name: 'raised_longitude',
+    type: 'double precision',
+    nullable: true,
+  })
+  raisedLongitude: number | null;
+
+  @Column({
+    name: 'raised_location_accuracy',
+    type: 'double precision',
+    nullable: true,
+  })
+  raisedLocationAccuracy: number | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

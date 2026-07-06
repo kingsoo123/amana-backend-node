@@ -89,7 +89,12 @@ export class NotificationsService {
   }
 
   async notifyDisputeOpened(
-    dispute: { id: string; reason: string },
+    dispute: {
+      id: string;
+      reason: string;
+      raisedLatitude?: number | null;
+      raisedLongitude?: number | null;
+    },
     invoice: Invoice,
   ) {
     const seller =
@@ -127,18 +132,36 @@ export class NotificationsService {
     }
 
     const admins = await this.usersService.listAdmins();
+    const locationNote = this.formatDisputeLocationForNotification(dispute);
+
     await Promise.all(
       admins.map((admin) =>
         this.notificationsRepository.save({
           userId: admin.id,
           type: 'dispute_opened',
           title: 'New dispute',
-          message: `${buyerLabel} disputed ${invoice.invoiceNumber} (${reasonLabel}).`,
+          message: `${buyerLabel} disputed ${invoice.invoiceNumber} (${reasonLabel}).${locationNote}`,
           link: adminLink,
           invoiceId: invoice.id,
         }),
       ),
     );
+  }
+
+  private formatDisputeLocationForNotification(dispute: {
+    raisedLatitude?: number | null;
+    raisedLongitude?: number | null;
+  }) {
+    if (
+      dispute.raisedLatitude == null ||
+      dispute.raisedLongitude == null ||
+      !Number.isFinite(dispute.raisedLatitude) ||
+      !Number.isFinite(dispute.raisedLongitude)
+    ) {
+      return ' Location not shared.';
+    }
+
+    return ` Raised near ${dispute.raisedLatitude.toFixed(5)}, ${dispute.raisedLongitude.toFixed(5)}.`;
   }
 
   async notifyDisputeResolved(
