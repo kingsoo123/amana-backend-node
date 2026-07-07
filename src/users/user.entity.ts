@@ -31,6 +31,9 @@ export class User {
   @Column({ default: false })
   verified: boolean;
 
+  @Column({ name: 'email_verified', default: false })
+  emailVerified: boolean;
+
   @Column({ type: 'varchar', default: 'user' })
   role: UserRole;
 

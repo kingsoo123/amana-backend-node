@@ -20,11 +20,32 @@ export class UsersService {
   }
 
   findByEmailWithPassword(email: string): Promise<User | null> {
-    return this.usersRepository
-      .createQueryBuilder('user')
-      .addSelect('user.passwordHash')
-      .where('user.email = :email', { email })
-      .getOne();
+    return this.usersRepository.findOne({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        firstname: true,
+        lastname: true,
+        phoneNumber: true,
+        passwordHash: true,
+        verified: true,
+        emailVerified: true,
+        role: true,
+        flutterwaveCustomerId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async isEmailVerified(userId: string): Promise<boolean> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: { id: true, emailVerified: true },
+    });
+
+    return Boolean(user?.emailVerified);
   }
 
   findById(id: string): Promise<User | null> {
@@ -71,6 +92,10 @@ export class UsersService {
   }): Promise<User> {
     const user = this.usersRepository.create(data);
     return this.usersRepository.save(user);
+  }
+
+  async setEmailVerified(userId: string, emailVerified: boolean): Promise<void> {
+    await this.usersRepository.update({ id: userId }, { emailVerified });
   }
 
   async setVerified(userId: string, verified: boolean): Promise<void> {

@@ -6,6 +6,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { EmailOtp } from './email-otp.entity';
+import { EmailOtpService } from './email-otp.service';
 import { RevokedToken } from './revoked-token.entity';
 import { RevokedTokensService } from './revoked-tokens.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -15,7 +17,7 @@ import { RolesGuard } from './guards/roles.guard';
   imports: [
     UsersModule,
     PassportModule,
-    TypeOrmModule.forFeature([RevokedToken]),
+    TypeOrmModule.forFeature([RevokedToken, EmailOtp]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -28,7 +30,7 @@ import { RolesGuard } from './guards/roles.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, RevokedTokensService, JwtStrategy, RolesGuard],
+  providers: [AuthService, EmailOtpService, RevokedTokensService, JwtStrategy, RolesGuard],
   exports: [JwtModule, RolesGuard],
 })
 export class AuthModule {}

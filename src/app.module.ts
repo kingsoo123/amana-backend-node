@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AccountsModule } from './accounts/accounts.module';
 import { AuthModule } from './auth/auth.module';
 import { RevokedToken } from './auth/revoked-token.entity';
+import { EmailOtp } from './auth/email-otp.entity';
 import { VirtualAccount } from './accounts/virtual-account.entity';
 import { BvnVerification } from './accounts/bvn-verification.entity';
 import { AdminModule } from './admin/admin.module';
@@ -23,6 +24,7 @@ import { buildTypeOrmConfig } from './config/database.config';
 const databaseEntities = [
   User,
   RevokedToken,
+  EmailOtp,
   VirtualAccount,
   BvnVerification,
   Invoice,
