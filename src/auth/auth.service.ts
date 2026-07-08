@@ -66,7 +66,7 @@ export class AuthService {
     await this.emailOtpService.issueForUser(user.id, email);
 
     return {
-      message: 'Account created. Enter the verification code sent to your email.',
+      message: 'Account created. Enter the verification code to continue.',
       email,
       requiresVerification: true,
     };

@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash, randomInt } from 'crypto';
+import { createHash } from 'crypto';
 import { Repository } from 'typeorm';
 import { EmailOtp } from './email-otp.entity';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
+/** Temporary until Resend email delivery is configured. */
+const PLACEHOLDER_OTP_CODE = '111111';
 
 @Injectable()
 export class EmailOtpService {
@@ -13,18 +15,9 @@ export class EmailOtpService {
     private readonly emailOtpsRepository: Repository<EmailOtp>,
   ) {}
 
-  async issueForUser(userId: string, email: string): Promise<void> {
-    const code = String(randomInt(100000, 1000000));
+  async issueForUser(userId: string, _email: string): Promise<void> {
+    const code = PLACEHOLDER_OTP_CODE;
     const expiresAt = new Date(Date.now() + OTP_TTL_MS);
-
-    // Log before DB write so the code is visible even if persistence fails.
-    console.log('');
-    console.log('==================================================');
-    console.log(`[Amana OTP] Email: ${email}`);
-    console.log(`[Amana OTP] Code:  ${code}`);
-    console.log('[Amana OTP] Expires in 10 minutes');
-    console.log('==================================================');
-    console.log('');
 
     await this.emailOtpsRepository.delete({ userId });
     await this.emailOtpsRepository.save({
