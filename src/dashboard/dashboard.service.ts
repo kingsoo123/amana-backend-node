@@ -47,9 +47,24 @@ export class DashboardService {
 
     let thisMonthReleased = 0;
     let lastMonthReleased = 0;
+    let thisMonthReceived = 0;
+    let lastMonthReceived = 0;
+    let thisMonthReceivedCount = 0;
 
     for (const invoice of active) {
       const amount = Number(invoice.amount);
+
+      if (this.isReceived(invoice.status)) {
+        const receivedAt = invoice.escrowedAt ?? invoice.paidAt;
+        if (receivedAt) {
+          if (receivedAt >= thisMonthStart) {
+            thisMonthReceived += amount;
+            thisMonthReceivedCount += 1;
+          } else if (receivedAt >= lastMonthStart && receivedAt < thisMonthStart) {
+            lastMonthReceived += amount;
+          }
+        }
+      }
 
       if (this.isReleased(invoice.status)) {
         fundsReleased += amount;
@@ -83,6 +98,13 @@ export class DashboardService {
           ? 100
           : null;
 
+    const monthReceivedChangePercent =
+      lastMonthReceived > 0
+        ? ((thisMonthReceived - lastMonthReceived) / lastMonthReceived) * 100
+        : thisMonthReceived > 0
+          ? 100
+          : null;
+
     const completedPayments = releasedCount + escrowCount;
     const successRatePercent =
       completedPayments > 0
@@ -105,6 +127,10 @@ export class DashboardService {
           invoiceCount: active.length,
         },
         period: {
+          thisMonthReceived,
+          thisMonthReceivedCount,
+          lastMonthReceived,
+          monthReceivedChangePercent,
           thisMonthReleased,
           lastMonthReleased,
           monthChangePercent,
@@ -120,6 +146,15 @@ export class DashboardService {
 
   private isReleased(status: InvoiceStatus) {
     return status === 'released' || status === 'paid';
+  }
+
+  private isReceived(status: InvoiceStatus) {
+    return (
+      status === 'paid_in_escrow' ||
+      status === 'disputed' ||
+      status === 'released' ||
+      status === 'paid'
+    );
   }
 
   private buildWeeklyVolume(invoices: Invoice[], weeks: number): WeeklyBucket[] {
