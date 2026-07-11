@@ -55,7 +55,7 @@ export class DashboardService {
       const amount = Number(invoice.amount);
 
       if (this.isReceived(invoice.status)) {
-        const receivedAt = invoice.escrowedAt ?? invoice.paidAt;
+        const receivedAt = this.asDate(invoice.escrowedAt ?? invoice.paidAt);
         if (receivedAt) {
           if (receivedAt >= thisMonthStart) {
             thisMonthReceived += amount;
@@ -70,7 +70,7 @@ export class DashboardService {
         fundsReleased += amount;
         releasedCount += 1;
 
-        const releasedAt = invoice.releasedAt ?? invoice.paidAt;
+        const releasedAt = this.asDate(invoice.releasedAt ?? invoice.paidAt);
         if (releasedAt) {
           if (releasedAt >= thisMonthStart) {
             thisMonthReleased += amount;
@@ -157,6 +157,15 @@ export class DashboardService {
     );
   }
 
+  private asDate(value: Date | string | null | undefined): Date | null {
+    if (value == null) {
+      return null;
+    }
+
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
   private buildWeeklyVolume(invoices: Invoice[], weeks: number): WeeklyBucket[] {
     const buckets: WeeklyBucket[] = [];
     const now = new Date();
@@ -172,7 +181,9 @@ export class DashboardService {
 
       let amount = 0;
       for (const invoice of invoices) {
-        const receivedAt = invoice.escrowedAt ?? invoice.releasedAt ?? invoice.paidAt;
+        const receivedAt = this.asDate(
+          invoice.escrowedAt ?? invoice.releasedAt ?? invoice.paidAt,
+        );
         if (!receivedAt) {
           continue;
         }
@@ -224,18 +235,19 @@ export class DashboardService {
     return items
       .sort(
         (left, right) =>
-          new Date(right.occurredAt).getTime() - new Date(left.occurredAt).getTime(),
+          new Date(right.occurredAt).getTime() -
+          new Date(left.occurredAt).getTime(),
       )
       .slice(0, 8);
   }
 
   private activityTimestamp(invoice: Invoice): Date | null {
-    return (
+    return this.asDate(
       invoice.releasedAt ??
-      invoice.paidAt ??
-      invoice.escrowedAt ??
-      invoice.paymentInitiatedAt ??
-      invoice.createdAt
+        invoice.paidAt ??
+        invoice.escrowedAt ??
+        invoice.paymentInitiatedAt ??
+        invoice.createdAt,
     );
   }
 
@@ -293,6 +305,19 @@ export class DashboardService {
         amount,
         currency: invoice.currency,
         status: 'Awaiting payment',
+        occurredAt: occurredAt.toISOString(),
+        positive: false,
+      };
+    }
+
+    if (invoice.status === 'disputed') {
+      return {
+        id: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        label: `Dispute open with ${buyer}`,
+        amount,
+        currency: invoice.currency,
+        status: 'Disputed',
         occurredAt: occurredAt.toISOString(),
         positive: false,
       };

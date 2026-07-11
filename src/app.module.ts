@@ -16,6 +16,11 @@ import { Invoice } from './invoices/invoice.entity';
 import { InvoicesModule } from './invoices/invoices.module';
 import { Notification } from './notifications/notification.entity';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PartnerApiKey } from './partners/partner-api-key.entity';
+import { PartnerAccessRequest } from './partners/partner-access-request.entity';
+import { PartnerWebhookDelivery } from './partners/partner-webhook-delivery.entity';
+import { Partner } from './partners/partner.entity';
+import { PartnersModule } from './partners/partners.module';
 import { PaymentsModule } from './payments/payments.module';
 import { User } from './users/user.entity';
 import { UsersModule } from './users/users.module';
@@ -30,6 +35,10 @@ const databaseEntities = [
   Invoice,
   Notification,
   Dispute,
+  Partner,
+  PartnerApiKey,
+  PartnerWebhookDelivery,
+  PartnerAccessRequest,
 ];
 
 @Module({
@@ -51,6 +60,7 @@ const databaseEntities = [
     AdminModule,
     NotificationsModule,
     PaymentsModule,
+    PartnersModule,
   ],
 })
 export class AppModule {}

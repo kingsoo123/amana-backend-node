@@ -1,7 +1,9 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Invoice } from '../invoices/invoice.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PartnersModule } from '../partners/partners.module';
+import { UsersModule } from '../users/users.module';
 import { Dispute } from './dispute.entity';
 import { DisputesController } from './disputes.controller';
 import { DisputesService } from './disputes.service';
@@ -10,6 +12,8 @@ import { DisputesService } from './disputes.service';
   imports: [
     TypeOrmModule.forFeature([Dispute, Invoice]),
     NotificationsModule,
+    UsersModule,
+    forwardRef(() => PartnersModule),
   ],
   controllers: [DisputesController],
   providers: [DisputesService],

@@ -1,14 +1,19 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  Optional,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Invoice } from '../invoices/invoice.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+import { WebhooksService } from '../partners/webhooks.service';
 import { User } from '../users/user.entity';
+import { UsersService } from '../users/users.service';
 import { Dispute } from './dispute.entity';
 import {
   canBuyerOpenDispute,
@@ -28,11 +33,44 @@ export class DisputesService {
     @InjectRepository(Invoice)
     private readonly invoicesRepository: Repository<Invoice>,
     private readonly notificationsService: NotificationsService,
+    private readonly usersService: UsersService,
+    @Optional()
+    @Inject(forwardRef(() => WebhooksService))
+    private readonly webhooksService?: WebhooksService,
   ) {}
 
   async createForInvoice(user: User, invoiceId: string, dto: CreateDisputeDto) {
+    return this.openDispute({
+      invoiceId,
+      buyerEmail: user.email,
+      raisedByUserId: user.id,
+      dto,
+    });
+  }
+
+  async createForInvoiceByEmail(
+    buyerEmail: string,
+    invoiceId: string,
+    dto: CreateDisputeDto,
+  ) {
+    const buyer = await this.usersService.findByEmail(buyerEmail);
+
+    return this.openDispute({
+      invoiceId,
+      buyerEmail,
+      raisedByUserId: buyer?.id ?? null,
+      dto,
+    });
+  }
+
+  private async openDispute(input: {
+    invoiceId: string;
+    buyerEmail: string;
+    raisedByUserId: string | null;
+    dto: CreateDisputeDto;
+  }) {
     const invoice = await this.invoicesRepository.findOne({
-      where: { id: invoiceId },
+      where: { id: input.invoiceId },
       relations: { seller: true },
     });
 
@@ -40,7 +78,7 @@ export class DisputesService {
       throw new NotFoundException('Invoice not found');
     }
 
-    if (invoice.buyerEmail.toLowerCase() !== user.email.toLowerCase()) {
+    if (invoice.buyerEmail.toLowerCase() !== input.buyerEmail.toLowerCase()) {
       throw new ForbiddenException('Only the buyer can open a dispute');
     }
 
@@ -57,7 +95,7 @@ export class DisputesService {
     }
 
     const existing = await this.disputesRepository.findOne({
-      where: { invoiceId },
+      where: { invoiceId: input.invoiceId },
     });
 
     if (existing && !this.isTerminal(existing.status)) {
@@ -69,22 +107,26 @@ export class DisputesService {
 
     const dispute = await this.disputesRepository.save({
       invoiceId: invoice.id,
-      raisedByUserId: user.id,
-      reason: dto.reason,
-      description: dto.description.trim(),
+      raisedByUserId: input.raisedByUserId,
+      reason: input.dto.reason,
+      description: input.dto.description.trim(),
       status: 'open',
       sellerResponseDueAt: deadlines.sellerResponseDueAt,
       platformReviewDueAt: deadlines.platformReviewDueAt,
       decisionDueAt: deadlines.decisionDueAt,
-      raisedLatitude: dto.latitude ?? null,
-      raisedLongitude: dto.longitude ?? null,
-      raisedLocationAccuracy: dto.locationAccuracy ?? null,
+      raisedLatitude: input.dto.latitude ?? null,
+      raisedLongitude: input.dto.longitude ?? null,
+      raisedLocationAccuracy: input.dto.locationAccuracy ?? null,
     });
 
     invoice.status = 'disputed';
     await this.invoicesRepository.save(invoice);
 
     await this.notificationsService.notifyDisputeOpened(dispute, invoice);
+    await this.webhooksService?.emitInvoiceEvent('dispute.opened', invoice, {
+      disputeId: dispute.id,
+      reason: dispute.reason,
+    });
 
     return {
       message:
@@ -178,6 +220,34 @@ export class DisputesService {
     await this.invoicesRepository.save(invoice);
     await this.disputesRepository.save(dispute);
 
+    if (dto.status === 'under_review') {
+      await this.webhooksService?.emitInvoiceEvent(
+        'dispute.under_review',
+        invoice,
+        { disputeId: dispute.id },
+      );
+    } else if (dto.status === 'resolved_seller') {
+      await this.webhooksService?.emitInvoiceEvent('dispute.resolved', invoice, {
+        disputeId: dispute.id,
+        outcome: 'resolved_seller',
+      });
+      await this.webhooksService?.emitInvoiceEvent('escrow.released', invoice, {
+        reason: 'dispute_resolved_seller',
+      });
+    } else if (dto.status === 'resolved_buyer') {
+      await this.webhooksService?.emitInvoiceEvent('dispute.resolved', invoice, {
+        disputeId: dispute.id,
+        outcome: 'resolved_buyer',
+      });
+      await this.webhooksService?.emitInvoiceEvent('refund.completed', invoice, {
+        disputeId: dispute.id,
+      });
+    } else if (dto.status === 'closed') {
+      await this.webhooksService?.emitInvoiceEvent('dispute.closed', invoice, {
+        disputeId: dispute.id,
+      });
+    }
+
     if (dto.status !== 'under_review') {
       await this.notificationsService.notifyDisputeResolved(
         invoice,
@@ -223,8 +293,10 @@ export class DisputesService {
     const isSeller =
       dispute.invoice?.sellerId === user.id ||
       dispute.invoice?.seller?.id === user.id;
+    const isInvoiceBuyer =
+      dispute.invoice?.buyerEmail?.toLowerCase() === user.email.toLowerCase();
 
-    if (!isBuyer && !isSeller && user.role !== 'admin') {
+    if (!isBuyer && !isSeller && !isInvoiceBuyer && user.role !== 'admin') {
       throw new ForbiddenException('You do not have access to this dispute');
     }
   }

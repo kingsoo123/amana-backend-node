@@ -36,12 +36,12 @@ export class Dispute {
   @JoinColumn({ name: 'invoice_id' })
   invoice: Invoice;
 
-  @Column({ name: 'raised_by_user_id', type: 'uuid' })
-  raisedByUserId: string;
+  @Column({ name: 'raised_by_user_id', type: 'uuid', nullable: true })
+  raisedByUserId: string | null;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'raised_by_user_id' })
-  raisedBy: User;
+  raisedBy: User | null;
 
   @Column({ type: 'varchar' })
   reason: DisputeReason;

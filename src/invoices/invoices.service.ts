@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -12,10 +13,19 @@ import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service';
 import { DisputesService } from '../disputes/disputes.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { WebhooksService } from '../partners/webhooks.service';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { Invoice, InvoiceStatus } from './invoice.entity';
+
+export type CreateInvoiceOptions = {
+  partnerId?: string | null;
+  externalReference?: string | null;
+  metadata?: Record<string, unknown> | null;
+  successUrl?: string | null;
+  cancelUrl?: string | null;
+};
 
 @Injectable()
 export class InvoicesService {
@@ -27,9 +37,16 @@ export class InvoicesService {
     private readonly notificationsService: NotificationsService,
     @Inject(forwardRef(() => DisputesService))
     private readonly disputesService: DisputesService,
+    @Optional()
+    @Inject(forwardRef(() => WebhooksService))
+    private readonly webhooksService?: WebhooksService,
   ) {}
 
-  async createInvoice(seller: User, dto: CreateInvoiceDto) {
+  async createInvoice(
+    seller: User,
+    dto: CreateInvoiceDto,
+    options?: CreateInvoiceOptions,
+  ) {
     await this.assertVerifiedUser(seller.id);
 
     const dva = await this.accountsService.findActiveVirtualAccount(seller.id);
@@ -60,6 +77,11 @@ export class InvoicesService {
       paymentReference,
       shareToken,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+      partnerId: options?.partnerId ?? null,
+      externalReference: options?.externalReference?.trim() || null,
+      metadata: options?.metadata ?? null,
+      successUrl: options?.successUrl ?? null,
+      cancelUrl: options?.cancelUrl ?? null,
     });
 
     const notification =
@@ -197,7 +219,20 @@ export class InvoicesService {
   async confirmReceipt(user: User, invoiceId: string) {
     const invoice = await this.findInvoiceOrThrow(invoiceId);
     this.assertBuyerAccess(user, invoice);
+    return this.releaseEscrow(invoice);
+  }
 
+  async confirmReceiptByEmail(invoiceId: string, buyerEmail: string) {
+    const invoice = await this.findInvoiceOrThrow(invoiceId);
+    if (invoice.buyerEmail.toLowerCase() !== buyerEmail.trim().toLowerCase()) {
+      throw new ForbiddenException(
+        'confirmedBy must match the transaction buyer email',
+      );
+    }
+    return this.releaseEscrow(invoice);
+  }
+
+  private async releaseEscrow(invoice: Invoice) {
     if (invoice.status === 'released' || invoice.status === 'paid') {
       throw new BadRequestException('You have already confirmed receipt for this invoice');
     }
@@ -222,6 +257,11 @@ export class InvoicesService {
     await this.invoicesRepository.save(invoice);
 
     await this.notificationsService.notifyInvoiceReleased(invoice, invoice.seller);
+
+    await this.webhooksService?.emitInvoiceEvent('receiver.confirmed', invoice);
+    await this.webhooksService?.emitInvoiceEvent('escrow.released', invoice, {
+      reason: 'receiver_confirmed',
+    });
 
     const dva = await this.accountsService.findActiveVirtualAccount(
       invoice.sellerId,
@@ -264,6 +304,7 @@ export class InvoicesService {
       invoice.status = 'payment_initiated';
       invoice.paymentInitiatedAt = new Date();
       await this.invoicesRepository.save(invoice);
+      await this.webhooksService?.emitInvoiceEvent('payment.initiated', invoice);
     }
 
     const dva = await this.accountsService.findActiveVirtualAccount(
@@ -372,6 +413,7 @@ export class InvoicesService {
     await this.invoicesRepository.save(invoice);
 
     await this.notificationsService.notifyInvoiceEscrowed(invoice, invoice.seller);
+    await this.webhooksService?.emitInvoiceEvent('payment.funded', invoice);
 
     return {
       matched: true as const,

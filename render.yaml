@@ -12,7 +12,7 @@ services:
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
-        value: "1d"
+        value: "1h"
       - key: FRONTEND_URL
         value: https://payonce.netlify.app
       - key: ADMIN_EMAIL

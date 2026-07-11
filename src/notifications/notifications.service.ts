@@ -218,6 +218,52 @@ export class NotificationsService {
     });
   }
 
+  async notifyPartnerAccessRequested(
+    request: { id: string; businessName: string },
+    seller: User,
+  ) {
+    const sellerName = `${seller.firstname} ${seller.lastname}`.trim();
+    const admins = await this.usersService.listAdmins();
+    const link = `/main/admin/partners?request=${request.id}`;
+
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsRepository.save({
+          userId: admin.id,
+          type: 'partner_access_requested',
+          title: 'Partner API access requested',
+          message: `${sellerName} (${seller.email}) requested marketplace API access for “${request.businessName}”.`,
+          link,
+          invoiceId: null,
+        }),
+      ),
+    );
+  }
+
+  async notifyPartnerAccessReviewed(
+    seller: User,
+    outcome: 'approved' | 'rejected',
+    reviewNotes?: string | null,
+  ) {
+    const approved = outcome === 'approved';
+    const notes = reviewNotes?.trim()
+      ? ` Note: ${reviewNotes.trim()}`
+      : '';
+
+    return this.notificationsRepository.save({
+      userId: seller.id,
+      type: approved ? 'partner_access_approved' : 'partner_access_rejected',
+      title: approved
+        ? 'Partner API access approved'
+        : 'Partner API access rejected',
+      message: approved
+        ? `Your marketplace API access was approved. Open Developers to generate your API key.${notes}`
+        : `Your marketplace API access request was rejected.${notes}`,
+      link: '/main/developers',
+      invoiceId: null,
+    });
+  }
+
   async listForUser(userId: string, limit = 20) {
     const notifications = await this.notificationsRepository.find({
       where: { userId },

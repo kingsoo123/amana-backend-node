@@ -14,7 +14,10 @@ export type NotificationType =
   | 'invoice_escrowed'
   | 'invoice_released'
   | 'dispute_opened'
-  | 'dispute_resolved';
+  | 'dispute_resolved'
+  | 'partner_access_requested'
+  | 'partner_access_approved'
+  | 'partner_access_rejected';
 
 @Entity('notifications')
 export class Notification {

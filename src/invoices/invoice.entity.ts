@@ -75,6 +75,21 @@ export class Invoice {
   @Column({ name: 'released_at', type: 'timestamptz', nullable: true })
   releasedAt: Date | null;
 
+  @Column({ name: 'partner_id', type: 'uuid', nullable: true })
+  partnerId: string | null;
+
+  @Column({ name: 'external_reference', type: 'varchar', nullable: true })
+  externalReference: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  metadata: Record<string, unknown> | null;
+
+  @Column({ name: 'success_url', type: 'varchar', nullable: true })
+  successUrl: string | null;
+
+  @Column({ name: 'cancel_url', type: 'varchar', nullable: true })
+  cancelUrl: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
