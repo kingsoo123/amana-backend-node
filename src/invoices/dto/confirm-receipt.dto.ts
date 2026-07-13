@@ -1,27 +1,17 @@
 import { Type } from 'class-transformer';
 import {
-  IsEmail,
   IsNumber,
   IsOptional,
   IsString,
   Length,
   Max,
-  MaxLength,
   Min,
 } from 'class-validator';
 
-export class ConfirmTransactionDto {
-  @IsEmail()
-  confirmedBy: string;
-
+export class ConfirmReceiptDto {
   @IsString()
   @Length(6, 6, { message: 'Delivery OTP must be 6 digits' })
   deliveryOtp: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  note?: string;
 
   @IsOptional()
   @Type(() => Number)

@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FlutterwaveService } from '../flutterwave/flutterwave.service';
+import { FlutterwaveTransfersService } from '../flutterwave/flutterwave-transfers.service';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { BvnVerification } from './bvn-verification.entity';
@@ -33,6 +34,7 @@ export class AccountsService {
     @InjectRepository(BvnVerification)
     private readonly bvnVerificationsRepository: Repository<BvnVerification>,
     private readonly flutterwaveService: FlutterwaveService,
+    private readonly flutterwaveTransfers: FlutterwaveTransfersService,
     private readonly usersService: UsersService,
     private readonly configService: ConfigService,
   ) {}
@@ -227,10 +229,16 @@ export class AccountsService {
       bvnVerification.verifiedLastName ?? user.lastname;
     await this.bvnVerificationsRepository.save(bvnVerification);
 
+    const bankCode =
+      (await this.flutterwaveTransfers.resolveBankCode(
+        flutterwaveAccount.bankName,
+      )) ?? null;
+
     const virtualAccount = await this.virtualAccountsRepository.save({
       userId: user.id,
       accountNumber: flutterwaveAccount.accountNumber,
       bankName: flutterwaveAccount.bankName,
+      bankCode,
       flwRef: flutterwaveAccount.flwRef,
       orderRef: flutterwaveAccount.orderRef,
       txRef,

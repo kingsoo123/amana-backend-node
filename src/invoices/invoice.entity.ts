@@ -75,6 +75,23 @@ export class Invoice {
   @Column({ name: 'released_at', type: 'timestamptz', nullable: true })
   releasedAt: Date | null;
 
+  /** Shared with seller/courier for handoff; cleared after buyer confirms. */
+  @Column({ name: 'delivery_otp_code', type: 'varchar', length: 6, nullable: true })
+  deliveryOtpCode: string | null;
+
+  @Column({ name: 'delivery_confirmed_latitude', type: 'double precision', nullable: true })
+  deliveryConfirmedLatitude: number | null;
+
+  @Column({ name: 'delivery_confirmed_longitude', type: 'double precision', nullable: true })
+  deliveryConfirmedLongitude: number | null;
+
+  @Column({
+    name: 'delivery_confirmed_accuracy',
+    type: 'double precision',
+    nullable: true,
+  })
+  deliveryConfirmedAccuracy: number | null;
+
   @Column({ name: 'partner_id', type: 'uuid', nullable: true })
   partnerId: string | null;
 
@@ -89,6 +106,41 @@ export class Invoice {
 
   @Column({ name: 'cancel_url', type: 'varchar', nullable: true })
   cancelUrl: string | null;
+
+  @Column({ name: 'flutterwave_charge_id', type: 'varchar', nullable: true })
+  flutterwaveChargeId: string | null;
+
+  @Column({ name: 'flutterwave_charge_reference', type: 'varchar', nullable: true })
+  flutterwaveChargeReference: string | null;
+
+  /** not_required | pending | processing | completed | failed */
+  @Column({ name: 'payout_status', type: 'varchar', nullable: true })
+  payoutStatus: string | null;
+
+  @Column({ name: 'payout_reference', type: 'varchar', nullable: true })
+  payoutReference: string | null;
+
+  @Column({ name: 'payout_transfer_id', type: 'varchar', nullable: true })
+  payoutTransferId: string | null;
+
+  @Column({ name: 'payout_at', type: 'timestamptz', nullable: true })
+  payoutAt: Date | null;
+
+  @Column({ name: 'payout_error', type: 'text', nullable: true })
+  payoutError: string | null;
+
+  /** not_required | processing | completed | failed */
+  @Column({ name: 'refund_status', type: 'varchar', nullable: true })
+  refundStatus: string | null;
+
+  @Column({ name: 'refund_reference', type: 'varchar', nullable: true })
+  refundReference: string | null;
+
+  @Column({ name: 'refund_at', type: 'timestamptz', nullable: true })
+  refundAt: Date | null;
+
+  @Column({ name: 'refund_error', type: 'text', nullable: true })
+  refundError: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

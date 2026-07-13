@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Dispute } from '../disputes/dispute.entity';
 import { Invoice, InvoiceStatus } from '../invoices/invoice.entity';
 
 type WeeklyBucket = {
@@ -24,6 +25,8 @@ export class DashboardService {
   constructor(
     @InjectRepository(Invoice)
     private readonly invoicesRepository: Repository<Invoice>,
+    @InjectRepository(Dispute)
+    private readonly disputesRepository: Repository<Dispute>,
   ) {}
 
   async getSellerDashboard(sellerId: string) {
@@ -42,26 +45,33 @@ export class DashboardService {
     let awaitingPaymentCount = 0;
 
     const now = new Date();
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const thisMonthStart = this.startOfMonth(now);
+    const lastMonthStart = this.startOfMonth(
+      new Date(now.getFullYear(), now.getMonth() - 1, 1),
+    );
+    const nextMonthStart = this.startOfMonth(
+      new Date(now.getFullYear(), now.getMonth() + 1, 1),
+    );
 
     let thisMonthReleased = 0;
     let lastMonthReleased = 0;
-    let thisMonthReceived = 0;
-    let lastMonthReceived = 0;
-    let thisMonthReceivedCount = 0;
+    let thisMonthReleasedCount = 0;
+    let thisMonthFunded = 0;
+    let lastMonthFunded = 0;
+    let thisMonthFundedCount = 0;
 
     for (const invoice of active) {
-      const amount = Number(invoice.amount);
+      const amount = this.toAmount(invoice.amount);
 
+      // Buyer paid into escrow (platform funded) — used for volume charts / funding stats.
       if (this.isReceived(invoice.status)) {
-        const receivedAt = this.asDate(invoice.escrowedAt ?? invoice.paidAt);
-        if (receivedAt) {
-          if (receivedAt >= thisMonthStart) {
-            thisMonthReceived += amount;
-            thisMonthReceivedCount += 1;
-          } else if (receivedAt >= lastMonthStart && receivedAt < thisMonthStart) {
-            lastMonthReceived += amount;
+        const fundedAt = this.paymentReceivedAt(invoice);
+        if (fundedAt) {
+          if (fundedAt >= thisMonthStart && fundedAt < nextMonthStart) {
+            thisMonthFunded += amount;
+            thisMonthFundedCount += 1;
+          } else if (fundedAt >= lastMonthStart && fundedAt < thisMonthStart) {
+            lastMonthFunded += amount;
           }
         }
       }
@@ -70,15 +80,20 @@ export class DashboardService {
         fundsReleased += amount;
         releasedCount += 1;
 
-        const releasedAt = this.asDate(invoice.releasedAt ?? invoice.paidAt);
+        // Seller was paid (escrow released to seller account).
+        const releasedAt = this.paymentReleasedAt(invoice);
         if (releasedAt) {
-          if (releasedAt >= thisMonthStart) {
+          if (releasedAt >= thisMonthStart && releasedAt < nextMonthStart) {
             thisMonthReleased += amount;
-          } else if (releasedAt >= lastMonthStart && releasedAt < thisMonthStart) {
+            thisMonthReleasedCount += 1;
+          } else if (
+            releasedAt >= lastMonthStart &&
+            releasedAt < thisMonthStart
+          ) {
             lastMonthReleased += amount;
           }
         }
-      } else if (invoice.status === 'paid_in_escrow') {
+      } else if (this.isHeldInEscrow(invoice.status)) {
         fundsInEscrow += amount;
         escrowCount += 1;
       } else if (
@@ -90,7 +105,21 @@ export class DashboardService {
       }
     }
 
-    const totalReceived = fundsReleased + fundsInEscrow;
+    // "Received" for sellers = money actually paid out to them.
+    const thisMonthReceived = this.roundMoney(thisMonthReleased);
+    const lastMonthReceived = this.roundMoney(lastMonthReleased);
+    const thisMonthReceivedCount = thisMonthReleasedCount;
+
+    fundsReleased = this.roundMoney(fundsReleased);
+    fundsInEscrow = this.roundMoney(fundsInEscrow);
+    awaitingPayment = this.roundMoney(awaitingPayment);
+    thisMonthReleased = thisMonthReceived;
+    lastMonthReleased = lastMonthReceived;
+    thisMonthFunded = this.roundMoney(thisMonthFunded);
+    lastMonthFunded = this.roundMoney(lastMonthFunded);
+
+    const totalReceived = fundsReleased;
+
     const monthChangePercent =
       lastMonthReleased > 0
         ? ((thisMonthReleased - lastMonthReleased) / lastMonthReleased) * 100
@@ -98,12 +127,7 @@ export class DashboardService {
           ? 100
           : null;
 
-    const monthReceivedChangePercent =
-      lastMonthReceived > 0
-        ? ((thisMonthReceived - lastMonthReceived) / lastMonthReceived) * 100
-        : thisMonthReceived > 0
-          ? 100
-          : null;
+    const monthReceivedChangePercent = monthChangePercent;
 
     const completedPayments = releasedCount + escrowCount;
     const successRatePercent =
@@ -134,6 +158,9 @@ export class DashboardService {
           thisMonthReleased,
           lastMonthReleased,
           monthChangePercent,
+          thisMonthFunded,
+          thisMonthFundedCount,
+          lastMonthFunded,
           successRatePercent,
           completedPayments,
         },
@@ -144,17 +171,175 @@ export class DashboardService {
     };
   }
 
+  async getBuyerDashboard(buyerEmail: string) {
+    const email = buyerEmail.trim().toLowerCase();
+    const invoices = await this.invoicesRepository
+      .createQueryBuilder('invoice')
+      .where('LOWER(invoice.buyer_email) = :email', { email })
+      .orderBy('invoice.updated_at', 'DESC')
+      .getMany();
+
+    let inEscrow = 0;
+    let inEscrowCount = 0;
+    let awaitingPayment = 0;
+    let awaitingPaymentCount = 0;
+    let openDisputes = 0;
+
+    for (const invoice of invoices) {
+      const amount = this.toAmount(invoice.amount);
+      if (invoice.status === 'paid_in_escrow') {
+        inEscrow += amount;
+        inEscrowCount += 1;
+      } else if (invoice.status === 'disputed') {
+        inEscrow += amount;
+        inEscrowCount += 1;
+        openDisputes += 1;
+      } else if (
+        invoice.status === 'pending' ||
+        invoice.status === 'payment_initiated'
+      ) {
+        awaitingPayment += amount;
+        awaitingPaymentCount += 1;
+      }
+    }
+
+    const disputeRefunds = await this.getBuyerDisputeRefunds(email);
+
+    return {
+      data: {
+        metrics: {
+          inEscrow: this.roundMoney(inEscrow),
+          inEscrowCount,
+          awaitingPayment: this.roundMoney(awaitingPayment),
+          awaitingPaymentCount,
+          openDisputes,
+          invoiceCount: invoices.length,
+        },
+        disputeRefunds,
+      },
+    };
+  }
+
+  private async getBuyerDisputeRefunds(buyerEmail: string) {
+    const disputes = await this.disputesRepository
+      .createQueryBuilder('dispute')
+      .leftJoinAndSelect('dispute.invoice', 'invoice')
+      .where('dispute.status = :status', { status: 'resolved_buyer' })
+      .andWhere('LOWER(invoice.buyer_email) = :email', { email: buyerEmail })
+      .orderBy('dispute.resolved_at', 'DESC')
+      .addOrderBy('dispute.created_at', 'DESC')
+      .getMany();
+
+    let totalAmount = 0;
+    let completedAmount = 0;
+    let completedCount = 0;
+    let failedCount = 0;
+    let processingCount = 0;
+    let pendingCount = 0;
+
+    const items = disputes.map((dispute) => {
+      const invoice = dispute.invoice;
+      const amount = this.toAmount(invoice?.amount ?? 0);
+      const refundStatus = invoice?.refundStatus ?? null;
+
+      totalAmount += amount;
+
+      if (refundStatus === 'completed' || refundStatus === 'not_required') {
+        completedAmount += amount;
+        completedCount += 1;
+      } else if (refundStatus === 'failed') {
+        failedCount += 1;
+      } else if (refundStatus === 'processing') {
+        processingCount += 1;
+      } else {
+        pendingCount += 1;
+      }
+
+      return {
+        disputeId: dispute.id,
+        invoiceId: invoice?.id ?? dispute.invoiceId,
+        invoiceNumber: invoice?.invoiceNumber ?? '—',
+        amount: this.roundMoney(amount),
+        currency: invoice?.currency ?? 'NGN',
+        refundStatus,
+        refundReference: invoice?.refundReference ?? null,
+        refundAt: invoice?.refundAt ? invoice.refundAt.toISOString() : null,
+        refundError: invoice?.refundError ?? null,
+        resolvedAt: dispute.resolvedAt
+          ? dispute.resolvedAt.toISOString()
+          : dispute.createdAt.toISOString(),
+      };
+    });
+
+    return {
+      totalCount: items.length,
+      totalAmount: this.roundMoney(totalAmount),
+      completedCount,
+      completedAmount: this.roundMoney(completedAmount),
+      failedCount,
+      processingCount,
+      pendingCount,
+      items,
+    };
+  }
+
   private isReleased(status: InvoiceStatus) {
     return status === 'released' || status === 'paid';
   }
 
+  private isHeldInEscrow(status: InvoiceStatus) {
+    return status === 'paid_in_escrow' || status === 'disputed';
+  }
+
   private isReceived(status: InvoiceStatus) {
-    return (
-      status === 'paid_in_escrow' ||
-      status === 'disputed' ||
-      status === 'released' ||
-      status === 'paid'
+    return this.isHeldInEscrow(status) || this.isReleased(status);
+  }
+
+  /** When buyer funds first hit escrow — never use paidAt after release (it is overwritten). */
+  private paymentReceivedAt(invoice: Invoice): Date | null {
+    return this.asDate(
+      invoice.escrowedAt ??
+        (this.isReleased(invoice.status) ? invoice.releasedAt : invoice.paidAt),
     );
+  }
+
+  private paymentReleasedAt(invoice: Invoice): Date | null {
+    if (!this.isReleased(invoice.status)) {
+      return null;
+    }
+
+    return this.asDate(invoice.releasedAt ?? invoice.paidAt);
+  }
+
+  private toAmount(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toString' in value &&
+      typeof value.toString === 'function'
+    ) {
+      const parsed = Number(value.toString());
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    return 0;
+  }
+
+  private roundMoney(value: number): number {
+    return Math.round(value * 100) / 100;
+  }
+
+  private startOfMonth(value: Date): Date {
+    return new Date(value.getFullYear(), value.getMonth(), 1, 0, 0, 0, 0);
   }
 
   private asDate(value: Date | string | null | undefined): Date | null {
@@ -169,11 +354,13 @@ export class DashboardService {
   private buildWeeklyVolume(invoices: Invoice[], weeks: number): WeeklyBucket[] {
     const buckets: WeeklyBucket[] = [];
     const now = new Date();
+    // Align to local week ending today, non-overlapping 7-day windows.
+    const currentWeekEnd = new Date(now);
+    currentWeekEnd.setHours(23, 59, 59, 999);
 
     for (let index = weeks - 1; index >= 0; index -= 1) {
-      const weekEnd = new Date(now);
-      weekEnd.setDate(now.getDate() - index * 7);
-      weekEnd.setHours(23, 59, 59, 999);
+      const weekEnd = new Date(currentWeekEnd);
+      weekEnd.setDate(currentWeekEnd.getDate() - index * 7);
 
       const weekStart = new Date(weekEnd);
       weekStart.setDate(weekEnd.getDate() - 6);
@@ -181,21 +368,24 @@ export class DashboardService {
 
       let amount = 0;
       for (const invoice of invoices) {
-        const receivedAt = this.asDate(
-          invoice.escrowedAt ?? invoice.releasedAt ?? invoice.paidAt,
-        );
-        if (!receivedAt) {
+        // Chart = what the seller was paid (released), not escrow funding.
+        if (!this.isReleased(invoice.status)) {
           continue;
         }
 
-        if (receivedAt >= weekStart && receivedAt <= weekEnd) {
-          amount += Number(invoice.amount);
+        const releasedAt = this.paymentReleasedAt(invoice);
+        if (!releasedAt) {
+          continue;
+        }
+
+        if (releasedAt >= weekStart && releasedAt <= weekEnd) {
+          amount += this.toAmount(invoice.amount);
         }
       }
 
       buckets.push({
         weekStart: weekStart.toISOString(),
-        amount,
+        amount: this.roundMoney(amount),
       });
     }
 
@@ -210,8 +400,8 @@ export class DashboardService {
     const averageTransfer = activeWeeks > 0 ? total / activeWeeks : 0;
 
     return {
-      averageTransfer,
-      peakWeek,
+      averageTransfer: this.roundMoney(averageTransfer),
+      peakWeek: this.roundMoney(peakWeek),
       activeWeeks,
     };
   }
@@ -220,7 +410,7 @@ export class DashboardService {
     const items: ActivityItem[] = [];
 
     for (const invoice of invoices) {
-      const amount = Number(invoice.amount);
+      const amount = this.toAmount(invoice.amount);
       const occurredAt = this.activityTimestamp(invoice);
       if (!occurredAt) {
         continue;
@@ -244,8 +434,8 @@ export class DashboardService {
   private activityTimestamp(invoice: Invoice): Date | null {
     return this.asDate(
       invoice.releasedAt ??
-        invoice.paidAt ??
         invoice.escrowedAt ??
+        invoice.paidAt ??
         invoice.paymentInitiatedAt ??
         invoice.createdAt,
     );

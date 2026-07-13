@@ -12,6 +12,7 @@ import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { Dispute } from './disputes/dispute.entity';
 import { DisputesModule } from './disputes/disputes.module';
+import { EscrowModule } from './escrow/escrow.module';
 import { Invoice } from './invoices/invoice.entity';
 import { InvoicesModule } from './invoices/invoices.module';
 import { Notification } from './notifications/notification.entity';
@@ -55,6 +56,7 @@ const databaseEntities = [
     AccountsModule,
     InvoicesModule,
     DisputesModule,
+    EscrowModule,
     CustomersModule,
     DashboardModule,
     AdminModule,

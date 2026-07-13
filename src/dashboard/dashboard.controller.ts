@@ -13,4 +13,10 @@ export class DashboardController {
   getSellerDashboard(@CurrentUser() user: User) {
     return this.dashboardService.getSellerDashboard(user.id);
   }
+
+  @Get('buyer')
+  @UseGuards(JwtAuthGuard)
+  getBuyerDashboard(@CurrentUser() user: User) {
+    return this.dashboardService.getBuyerDashboard(user.email);
+  }
 }

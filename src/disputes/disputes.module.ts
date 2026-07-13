@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Invoice } from '../invoices/invoice.entity';
+import { EscrowModule } from '../escrow/escrow.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PartnersModule } from '../partners/partners.module';
 import { UsersModule } from '../users/users.module';
@@ -13,6 +14,7 @@ import { DisputesService } from './disputes.service';
     TypeOrmModule.forFeature([Dispute, Invoice]),
     NotificationsModule,
     UsersModule,
+    EscrowModule,
     forwardRef(() => PartnersModule),
   ],
   controllers: [DisputesController],

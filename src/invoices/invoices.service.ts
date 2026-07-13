@@ -8,14 +8,16 @@ import {
   forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { Repository } from 'typeorm';
 import { AccountsService } from '../accounts/accounts.service';
 import { DisputesService } from '../disputes/disputes.service';
+import { EscrowSettlementService } from '../escrow/escrow-settlement.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WebhooksService } from '../partners/webhooks.service';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
+import { ConfirmReceiptDto } from './dto/confirm-receipt.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { Invoice, InvoiceStatus } from './invoice.entity';
 
@@ -35,6 +37,7 @@ export class InvoicesService {
     private readonly accountsService: AccountsService,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
+    private readonly escrowSettlement: EscrowSettlementService,
     @Inject(forwardRef(() => DisputesService))
     private readonly disputesService: DisputesService,
     @Optional()
@@ -130,8 +133,8 @@ export class InvoicesService {
     const invoices = await this.invoicesRepository
       .createQueryBuilder('invoice')
       .leftJoinAndSelect('invoice.seller', 'seller')
-      .where('LOWER(invoice.buyer_email) = :email', { email: normalizedEmail })
-      .orderBy('invoice.created_at', 'DESC')
+      .where('LOWER(invoice.buyerEmail) = :email', { email: normalizedEmail })
+      .orderBy('invoice.createdAt', 'DESC')
       .getMany();
 
     return {
@@ -148,9 +151,12 @@ export class InvoicesService {
       await this.assertVerifiedUser(user.id);
     }
 
-    const dva = await this.accountsService.findActiveVirtualAccount(
-      invoice.sellerId,
-    );
+    if (await this.ensureDeliveryOtp(invoice)) {
+      await this.invoicesRepository.save(invoice);
+    }
+
+    const paymentAccount =
+      await this.escrowSettlement.getPaymentAccountForInvoice(invoice);
 
     const disputeContext = await this.disputesService.getInvoiceDisputeContext(
       invoice,
@@ -158,7 +164,9 @@ export class InvoicesService {
 
     return {
       data: {
-        ...this.toInvoiceResponse(invoice, invoice.seller, dva).data,
+        ...this.toInvoiceResponse(invoice, invoice.seller, paymentAccount, {
+          viewerRole: isSeller ? 'seller' : 'buyer',
+        }).data,
         ...disputeContext,
       },
     };
@@ -178,17 +186,21 @@ export class InvoicesService {
       throw new BadRequestException('This invoice has been cancelled');
     }
 
-    const dva = await this.accountsService.findActiveVirtualAccount(
-      invoice.sellerId,
-    );
+    const paymentAccount =
+      await this.escrowSettlement.getPaymentAccountForInvoice(invoice);
 
-    if (!dva) {
+    if (!paymentAccount) {
       throw new BadRequestException(
-        'Seller payment account is not available for this invoice',
+        'Payment account is not available for this invoice',
       );
     }
 
-    return this.toPaymentView(invoice, invoice.seller, dva);
+    // Seller must still be verified so payout destination exists under true hold.
+    if (this.escrowSettlement.isTrueHoldEnabled()) {
+      await this.assertVerifiedUser(invoice.sellerId);
+    }
+
+    return this.toPaymentView(invoice, invoice.seller, paymentAccount);
   }
 
   async initiatePayment(user: User | null, invoiceId: string) {
@@ -216,23 +228,31 @@ export class InvoicesService {
     return this.markPaymentInitiated(invoice);
   }
 
-  async confirmReceipt(user: User, invoiceId: string) {
+  async confirmReceipt(
+    user: User,
+    invoiceId: string,
+    dto: ConfirmReceiptDto,
+  ) {
     const invoice = await this.findInvoiceOrThrow(invoiceId);
     this.assertBuyerAccess(user, invoice);
-    return this.releaseEscrow(invoice);
+    return this.releaseEscrow(invoice, dto);
   }
 
-  async confirmReceiptByEmail(invoiceId: string, buyerEmail: string) {
+  async confirmReceiptByEmail(
+    invoiceId: string,
+    buyerEmail: string,
+    dto: ConfirmReceiptDto,
+  ) {
     const invoice = await this.findInvoiceOrThrow(invoiceId);
     if (invoice.buyerEmail.toLowerCase() !== buyerEmail.trim().toLowerCase()) {
       throw new ForbiddenException(
         'confirmedBy must match the transaction buyer email',
       );
     }
-    return this.releaseEscrow(invoice);
+    return this.releaseEscrow(invoice, dto);
   }
 
-  private async releaseEscrow(invoice: Invoice) {
+  private async releaseEscrow(invoice: Invoice, dto: ConfirmReceiptDto) {
     if (invoice.status === 'released' || invoice.status === 'paid') {
       throw new BadRequestException('You have already confirmed receipt for this invoice');
     }
@@ -249,28 +269,72 @@ export class InvoicesService {
       );
     }
 
+    if (await this.ensureDeliveryOtp(invoice)) {
+      await this.invoicesRepository.save(invoice);
+    }
+
+    const submittedOtp = dto.deliveryOtp.trim();
+    if (!invoice.deliveryOtpCode || invoice.deliveryOtpCode !== submittedOtp) {
+      throw new BadRequestException(
+        'Invalid delivery OTP. Ask the seller or courier for the code shown on their invoice.',
+      );
+    }
+
+    const settled = await this.escrowSettlement.payoutToSeller(invoice);
+
     const now = new Date();
-    invoice.status = 'released';
-    invoice.buyerConfirmedAt = now;
-    invoice.releasedAt = now;
-    invoice.paidAt = now;
-    await this.invoicesRepository.save(invoice);
+    settled.status = 'released';
+    settled.buyerConfirmedAt = now;
+    settled.releasedAt = now;
+    settled.deliveryOtpCode = null;
+    settled.deliveryConfirmedLatitude =
+      dto.latitude != null && Number.isFinite(dto.latitude) ? dto.latitude : null;
+    settled.deliveryConfirmedLongitude =
+      dto.longitude != null && Number.isFinite(dto.longitude)
+        ? dto.longitude
+        : null;
+    settled.deliveryConfirmedAccuracy =
+      dto.locationAccuracy != null && Number.isFinite(dto.locationAccuracy)
+        ? dto.locationAccuracy
+        : null;
+    if (!settled.paidAt) {
+      settled.paidAt = settled.escrowedAt ?? now;
+    }
+    await this.invoicesRepository.save(settled);
 
-    await this.notificationsService.notifyInvoiceReleased(invoice, invoice.seller);
+    await this.notificationsService.notifyInvoiceReleased(
+      settled,
+      settled.seller,
+    );
 
-    await this.webhooksService?.emitInvoiceEvent('receiver.confirmed', invoice);
-    await this.webhooksService?.emitInvoiceEvent('escrow.released', invoice, {
+    await this.webhooksService?.emitInvoiceEvent('receiver.confirmed', settled, {
+      deliveryProof: {
+        otpVerified: true,
+        location: this.toDeliveryLocation(settled),
+      },
+    });
+    await this.webhooksService?.emitInvoiceEvent('escrow.released', settled, {
       reason: 'receiver_confirmed',
+      payoutStatus: settled.payoutStatus,
+      payoutReference: settled.payoutReference,
     });
 
     const dva = await this.accountsService.findActiveVirtualAccount(
-      invoice.sellerId,
+      settled.sellerId,
     );
 
+    const payoutNote =
+      settled.payoutStatus === 'failed'
+        ? ' Confirmation recorded, but seller payout failed and will need retry.'
+        : settled.payoutStatus === 'processing'
+          ? ' Seller payout has been queued.'
+          : '';
+
     return {
-      message:
-        'Receipt confirmed. Funds have been released to the seller.',
-      ...this.toInvoiceResponse(invoice, invoice.seller, dva),
+      message: `Receipt confirmed with delivery OTP. Funds have been released to the seller.${payoutNote}`,
+      ...this.toInvoiceResponse(settled, settled.seller, dva, {
+        viewerRole: 'buyer',
+      }),
     };
   }
 
@@ -307,14 +371,19 @@ export class InvoicesService {
       await this.webhooksService?.emitInvoiceEvent('payment.initiated', invoice);
     }
 
-    const dva = await this.accountsService.findActiveVirtualAccount(
-      invoice.sellerId,
-    );
+    const paymentAccount =
+      await this.escrowSettlement.getPaymentAccountForInvoice(invoice);
 
-    if (!dva) {
+    if (!paymentAccount) {
       throw new BadRequestException(
-        'Seller payment account is not available',
+        this.escrowSettlement.isTrueHoldEnabled()
+          ? 'Escrow collection account is not configured. Create an active virtual account on the admin user.'
+          : 'Seller payment account is not available',
       );
+    }
+
+    if (this.escrowSettlement.isTrueHoldEnabled()) {
+      await this.assertVerifiedUser(invoice.sellerId);
     }
 
     const seller =
@@ -325,9 +394,10 @@ export class InvoicesService {
     }
 
     return {
-      message:
-        'Payment initiated. Transfer the exact amount using the account details provided. Funds will be held in escrow until you confirm receipt of your items.',
-      data: this.toPaymentView(invoice, seller, dva),
+      message: this.escrowSettlement.isTrueHoldEnabled()
+        ? 'Payment initiated. Transfer the exact amount to the Amana escrow account. Funds stay held until you confirm receipt.'
+        : 'Payment initiated. Transfer the exact amount using the account details provided. Funds will be held in escrow until you confirm receipt of your items.',
+      data: this.toPaymentView(invoice, seller, paymentAccount),
     };
   }
 
@@ -373,6 +443,8 @@ export class InvoicesService {
     paymentReference: string;
     amount: number;
     status: string;
+    chargeId?: string | null;
+    chargeReference?: string | null;
   }) {
     const paymentReference = input.paymentReference.trim().toUpperCase();
     const invoice = await this.invoicesRepository.findOne({
@@ -410,10 +482,17 @@ export class InvoicesService {
     const now = new Date();
     invoice.status = 'paid_in_escrow';
     invoice.escrowedAt = now;
+    invoice.paidAt = now;
+    invoice.deliveryOtpCode = this.generateDeliveryOtp();
+    invoice.flutterwaveChargeId = input.chargeId ?? invoice.flutterwaveChargeId;
+    invoice.flutterwaveChargeReference =
+      input.chargeReference ?? invoice.flutterwaveChargeReference;
     await this.invoicesRepository.save(invoice);
 
     await this.notificationsService.notifyInvoiceEscrowed(invoice, invoice.seller);
-    await this.webhooksService?.emitInvoiceEvent('payment.funded', invoice);
+    await this.webhooksService?.emitInvoiceEvent('payment.funded', invoice, {
+      trueHold: this.escrowSettlement.isTrueHoldEnabled(),
+    });
 
     return {
       matched: true as const,
@@ -431,6 +510,56 @@ export class InvoicesService {
 
   private generatePaymentReference(): string {
     return `PAY-${randomBytes(4).toString('hex').toUpperCase()}`;
+  }
+
+  private generateDeliveryOtp(): string {
+    return String(randomInt(100000, 1000000));
+  }
+
+  /** Backfill OTP for invoices escrowed before delivery proof shipped. */
+  private async ensureDeliveryOtp(invoice: Invoice): Promise<boolean> {
+    if (invoice.deliveryOtpCode) {
+      return false;
+    }
+
+    if (
+      invoice.status !== 'paid_in_escrow' &&
+      invoice.status !== 'disputed'
+    ) {
+      return false;
+    }
+
+    invoice.deliveryOtpCode = this.generateDeliveryOtp();
+    return true;
+  }
+
+  private toDeliveryLocation(invoice: Invoice) {
+    if (
+      invoice.deliveryConfirmedLatitude == null ||
+      invoice.deliveryConfirmedLongitude == null ||
+      !Number.isFinite(invoice.deliveryConfirmedLatitude) ||
+      !Number.isFinite(invoice.deliveryConfirmedLongitude)
+    ) {
+      return null;
+    }
+
+    return {
+      latitude: invoice.deliveryConfirmedLatitude,
+      longitude: invoice.deliveryConfirmedLongitude,
+      accuracy: invoice.deliveryConfirmedAccuracy,
+    };
+  }
+
+  private toDeliveryProof(invoice: Invoice) {
+    if (!invoice.buyerConfirmedAt) {
+      return null;
+    }
+
+    return {
+      confirmedAt: invoice.buyerConfirmedAt,
+      otpVerified: true,
+      location: this.toDeliveryLocation(invoice),
+    };
   }
 
   private toInvoiceSummary(invoice: Invoice) {
@@ -462,7 +591,14 @@ export class InvoicesService {
     invoice: Invoice,
     seller: User,
     dva: { accountNumber: string; bankName: string; accountStatus: string } | null,
+    options?: { viewerRole?: 'seller' | 'buyer' },
   ) {
+    const viewerRole = options?.viewerRole;
+    const showDeliveryOtp =
+      viewerRole === 'seller' &&
+      Boolean(invoice.deliveryOtpCode) &&
+      (invoice.status === 'paid_in_escrow' || invoice.status === 'disputed');
+
     return {
       data: {
         ...this.toInvoiceSummary(invoice),
@@ -471,6 +607,10 @@ export class InvoicesService {
         escrowedAt: invoice.escrowedAt,
         buyerConfirmedAt: invoice.buyerConfirmedAt,
         releasedAt: invoice.releasedAt,
+        requiresDeliveryOtp:
+          invoice.status === 'paid_in_escrow' && Boolean(invoice.deliveryOtpCode),
+        deliveryOtpCode: showDeliveryOtp ? invoice.deliveryOtpCode : null,
+        deliveryProof: this.toDeliveryProof(invoice),
         seller: {
           name: `${seller.firstname} ${seller.lastname}`.trim(),
           email: seller.email,
@@ -490,7 +630,13 @@ export class InvoicesService {
   private toPaymentView(
     invoice: Invoice,
     seller: User,
-    dva: { accountNumber: string; bankName: string },
+    paymentAccount: {
+      accountNumber: string;
+      bankName: string;
+      accountStatus?: string;
+      holderName?: string | null;
+      isPlatformEscrow?: boolean;
+    },
   ) {
     return {
       data: {
@@ -509,8 +655,11 @@ export class InvoicesService {
           name: `${seller.firstname} ${seller.lastname}`.trim(),
         },
         payment: {
-          accountNumber: dva.accountNumber,
-          bankName: dva.bankName,
+          accountNumber: paymentAccount.accountNumber,
+          bankName: paymentAccount.bankName,
+          accountStatus: paymentAccount.accountStatus ?? 'active',
+          holderName: paymentAccount.holderName ?? null,
+          isPlatformEscrow: Boolean(paymentAccount.isPlatformEscrow),
           amount: Number(invoice.amount),
           currency: invoice.currency,
           paymentReference: invoice.paymentReference,

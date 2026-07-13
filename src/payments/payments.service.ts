@@ -61,6 +61,8 @@ export class PaymentsService {
       paymentReference,
       amount: Number(charge.amount),
       status,
+      chargeId: charge.id ? String(charge.id) : null,
+      chargeReference: charge.reference ? String(charge.reference) : null,
     });
 
     return {

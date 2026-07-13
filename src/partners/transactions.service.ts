@@ -102,6 +102,12 @@ export class TransactionsService {
     const updated = await this.invoicesService.confirmReceiptByEmail(
       invoice.id,
       dto.confirmedBy,
+      {
+        deliveryOtp: dto.deliveryOtp,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        locationAccuracy: dto.locationAccuracy,
+      },
     );
 
     const refreshed = await this.findPartnerInvoice(partner, updated.data.id);

@@ -15,6 +15,7 @@ export type NotificationType =
   | 'invoice_released'
   | 'dispute_opened'
   | 'dispute_resolved'
+  | 'verify_for_refund'
   | 'partner_access_requested'
   | 'partner_access_approved'
   | 'partner_access_rejected';

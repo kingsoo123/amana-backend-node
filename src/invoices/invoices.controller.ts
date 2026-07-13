@@ -11,6 +11,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { ConfirmReceiptDto } from './dto/confirm-receipt.dto';
 import { InvoicesService } from './invoices.service';
 
 @Controller('api/v1/invoices')
@@ -65,7 +66,11 @@ export class InvoicesController {
 
   @Post(':id/confirm-receipt')
   @UseGuards(JwtAuthGuard)
-  confirmReceipt(@CurrentUser() user: User, @Param('id') id: string) {
-    return this.invoicesService.confirmReceipt(user, id);
+  confirmReceipt(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: ConfirmReceiptDto,
+  ) {
+    return this.invoicesService.confirmReceipt(user, id, dto);
   }
 }

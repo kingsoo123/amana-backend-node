@@ -105,6 +105,10 @@ export class CustomersService {
     const enriched = await Promise.all(
       customers.map(async (customer) => {
         const user = await this.usersService.findByEmail(customer.buyerEmail);
+        if (user?.role === 'admin') {
+          return null;
+        }
+
         const displayName =
           customer.buyerName ??
           (user ? `${user.firstname} ${user.lastname}`.trim() : null) ??
@@ -126,7 +130,12 @@ export class CustomersService {
       }),
     );
 
-    const summary = enriched.reduce(
+    const visibleCustomers = enriched.filter(
+      (customer): customer is NonNullable<(typeof enriched)[number]> =>
+        customer !== null,
+    );
+
+    const summary = visibleCustomers.reduce(
       (totals, customer) => ({
         customerCount: totals.customerCount + 1,
         totalInvoiced: totals.totalInvoiced + customer.totalInvoiced,
@@ -144,7 +153,7 @@ export class CustomersService {
     );
 
     return {
-      data: enriched,
+      data: visibleCustomers,
       summary,
     };
   }

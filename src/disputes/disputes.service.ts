@@ -10,6 +10,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Invoice } from '../invoices/invoice.entity';
+import { EscrowSettlementService } from '../escrow/escrow-settlement.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WebhooksService } from '../partners/webhooks.service';
 import { User } from '../users/user.entity';
@@ -34,6 +35,7 @@ export class DisputesService {
     private readonly invoicesRepository: Repository<Invoice>,
     private readonly notificationsService: NotificationsService,
     private readonly usersService: UsersService,
+    private readonly escrowSettlement: EscrowSettlementService,
     @Optional()
     @Inject(forwardRef(() => WebhooksService))
     private readonly webhooksService?: WebhooksService,
@@ -180,7 +182,10 @@ export class DisputesService {
     }
 
     const disputes = await qb.getMany();
-    return { data: disputes.map((dispute) => this.toAdminResponse(dispute)) };
+    const data = await Promise.all(
+      disputes.map((dispute) => this.toAdminResponseAsync(dispute)),
+    );
+    return { data };
   }
 
   async adminResolve(
@@ -207,11 +212,15 @@ export class DisputesService {
       dto.status === 'under_review' ? dispute.resolvedAt : now;
 
     if (dto.status === 'resolved_seller') {
+      await this.escrowSettlement.payoutToSeller(invoice);
       invoice.status = 'released';
       invoice.releasedAt = now;
-      invoice.paidAt = now;
+      if (!invoice.paidAt) {
+        invoice.paidAt = invoice.escrowedAt ?? now;
+      }
       invoice.buyerConfirmedAt = invoice.buyerConfirmedAt ?? now;
     } else if (dto.status === 'resolved_buyer') {
+      await this.escrowSettlement.refundToBuyer(invoice);
       invoice.status = 'cancelled';
     } else if (dto.status === 'closed') {
       invoice.status = 'paid_in_escrow';
@@ -233,15 +242,23 @@ export class DisputesService {
       });
       await this.webhooksService?.emitInvoiceEvent('escrow.released', invoice, {
         reason: 'dispute_resolved_seller',
+        payoutStatus: invoice.payoutStatus,
       });
     } else if (dto.status === 'resolved_buyer') {
       await this.webhooksService?.emitInvoiceEvent('dispute.resolved', invoice, {
         disputeId: dispute.id,
         outcome: 'resolved_buyer',
       });
-      await this.webhooksService?.emitInvoiceEvent('refund.completed', invoice, {
-        disputeId: dispute.id,
-      });
+      await this.webhooksService?.emitInvoiceEvent(
+        invoice.refundStatus === 'completed'
+          ? 'refund.completed'
+          : 'refund.processing',
+        invoice,
+        {
+          disputeId: dispute.id,
+          refundStatus: invoice.refundStatus,
+        },
+      );
     } else if (dto.status === 'closed') {
       await this.webhooksService?.emitInvoiceEvent('dispute.closed', invoice, {
         disputeId: dispute.id,
@@ -256,10 +273,87 @@ export class DisputesService {
       );
     }
 
+    const refreshed = await this.findDisputeOrThrow(disputeId);
+    const refundNote =
+      dto.status === 'resolved_buyer'
+        ? this.refundMessage(refreshed.invoice?.refundStatus ?? null)
+        : null;
+
     return {
-      message: 'Dispute updated successfully',
-      data: this.toAdminResponse(await this.findDisputeOrThrow(disputeId)),
+      message: refundNote
+        ? `Dispute resolved in buyer’s favour. ${refundNote}`
+        : 'Dispute updated successfully',
+      data: await this.toAdminResponseAsync(refreshed),
     };
+  }
+
+  async adminRetryRefund(admin: User, disputeId: string) {
+    const dispute = await this.findDisputeOrThrow(disputeId);
+    const invoice = dispute.invoice;
+
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found for this dispute');
+    }
+
+    if (dispute.status !== 'resolved_buyer') {
+      throw new BadRequestException(
+        'Refunds can only be retried after resolving the dispute in the buyer’s favour',
+      );
+    }
+
+    if (
+      invoice.refundStatus === 'completed' ||
+      invoice.refundStatus === 'not_required'
+    ) {
+      throw new BadRequestException('This refund is already complete');
+    }
+
+    // Allow retry after a failed transfer (or legacy pending_manual rows).
+    if (invoice.refundStatus === 'processing') {
+      throw new BadRequestException(
+        'A refund transfer is already in progress for this invoice',
+      );
+    }
+
+    invoice.refundStatus = null;
+    invoice.refundError = null;
+    await this.invoicesRepository.save(invoice);
+
+    const refunded = await this.escrowSettlement.refundToBuyer(invoice);
+
+    dispute.resolvedByAdminId = admin.id;
+    await this.disputesRepository.save(dispute);
+
+    await this.webhooksService?.emitInvoiceEvent(
+      refunded.refundStatus === 'completed'
+        ? 'refund.completed'
+        : 'refund.processing',
+      refunded,
+      {
+        disputeId: dispute.id,
+        refundStatus: refunded.refundStatus,
+        retried: true,
+      },
+    );
+
+    const refreshed = await this.findDisputeOrThrow(disputeId);
+    return {
+      message: this.refundMessage(refreshed.invoice?.refundStatus ?? null),
+      data: await this.toAdminResponseAsync(refreshed),
+    };
+  }
+
+  private refundMessage(refundStatus: string | null) {
+    if (refundStatus === 'completed' || refundStatus === 'not_required') {
+      return 'Refund sent to the buyer’s verified account.';
+    }
+    if (refundStatus === 'processing') {
+      return 'Refund transfer has been queued.';
+    }
+    if (refundStatus === 'failed') {
+      return 'Refund transfer failed. You can retry once the buyer account is ready.';
+    }
+    return 'Refund status updated.';
   }
 
   async findDisputeOrThrow(disputeId: string) {
@@ -381,6 +475,7 @@ export class DisputesService {
   private toAdminResponse(dispute: Dispute) {
     const base = this.toResponse(dispute);
     const raisedBy = dispute.raisedBy;
+    const invoice = dispute.invoice;
 
     return {
       ...base,
@@ -398,6 +493,37 @@ export class DisputesService {
             email: dispute.resolvedByAdmin.email,
           }
         : null,
+      buyerVerified: false,
+      invoice: base.invoice
+        ? {
+            ...base.invoice,
+            refundStatus: invoice?.refundStatus ?? null,
+            refundReference: invoice?.refundReference ?? null,
+            refundAt: invoice?.refundAt
+              ? invoice.refundAt.toISOString()
+              : null,
+            refundError: invoice?.refundError ?? null,
+          }
+        : null,
+    };
+  }
+
+  private async toAdminResponseAsync(dispute: Dispute) {
+    const response = this.toAdminResponse(dispute);
+    const buyerEmail = dispute.invoice?.buyerEmail;
+    if (!buyerEmail) {
+      return response;
+    }
+
+    const buyer = await this.usersService.findByEmail(buyerEmail);
+    if (!buyer) {
+      return response;
+    }
+
+    const buyerVerified = await this.usersService.isVerified(buyer.id);
+    return {
+      ...response,
+      buyerVerified,
     };
   }
 }

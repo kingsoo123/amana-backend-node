@@ -61,7 +61,8 @@ export class UsersService {
     const digits = trimmed.replace(/\D/g, '');
     const qb = this.usersRepository
       .createQueryBuilder('user')
-      .where('user.id != :excludeUserId', { excludeUserId });
+      .where('user.id != :excludeUserId', { excludeUserId })
+      .andWhere('user.role != :adminRole', { adminRole: 'admin' });
 
     if (trimmed.includes('@')) {
       qb.andWhere('LOWER(user.email) LIKE :email', {

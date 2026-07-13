@@ -19,13 +19,18 @@ import {
 } from './dto/create-api-key.dto';
 import { CreatePartnerDto } from './dto/create-partner.dto';
 import { ReviewPartnerAccessRequestDto } from './dto/review-partner-access-request.dto';
+import type { WebhookDeliveryStatus } from './partner-webhook-delivery.entity';
 import { PartnersService } from './partners.service';
+import { WebhooksService } from './webhooks.service';
 
 @Controller('api/v1/admin/partners')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('admin')
 export class AdminPartnersController {
-  constructor(private readonly partnersService: PartnersService) {}
+  constructor(
+    private readonly partnersService: PartnersService,
+    private readonly webhooksService: WebhooksService,
+  ) {}
 
   @Post()
   create(@Body() dto: CreatePartnerDto) {
@@ -40,6 +45,24 @@ export class AdminPartnersController {
   @Get('access-requests')
   listAccessRequests(@Query('status') status?: string) {
     return this.partnersService.listAccessRequests(status);
+  }
+
+  @Get('webhook-deliveries')
+  listWebhookDeliveries(
+    @Query('status') status?: WebhookDeliveryStatus,
+    @Query('partnerId') partnerId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.webhooksService.listDeliveries({
+      status,
+      partnerId,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Post('webhook-deliveries/:deliveryId/retry')
+  retryWebhookDelivery(@Param('deliveryId') deliveryId: string) {
+    return this.webhooksService.retryDelivery(deliveryId);
   }
 
   @Post('access-requests/:id/approve')

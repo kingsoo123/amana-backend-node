@@ -26,7 +26,7 @@ export class NotificationsService {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-    const link = `/main/invoices?view=${invoice.id}`;
+    const link = `/main/invoices?tab=received&view=${invoice.id}`;
 
     return this.notificationsRepository.save({
       userId: buyer.id,
@@ -45,14 +45,15 @@ export class NotificationsService {
     });
     const buyerLabel = invoice.buyerName ?? invoice.buyerEmail;
     const sellerName = `${seller.firstname} ${seller.lastname}`.trim();
-    const link = `/main/invoices?view=${invoice.id}`;
+    const sellerLink = `/main/invoices?tab=sent&view=${invoice.id}`;
+    const buyerLink = `/main/invoices?tab=received&view=${invoice.id}`;
 
     await this.notificationsRepository.save({
       userId: seller.id,
       type: 'invoice_escrowed',
       title: 'Payment held in escrow',
-      message: `${buyerLabel} paid ₦${amount} for ${invoice.invoiceNumber}. Funds are held until the buyer confirms receipt.`,
-      link,
+      message: `${buyerLabel} paid ₦${amount} for ${invoice.invoiceNumber}. Funds are held until the buyer confirms with delivery OTP ${invoice.deliveryOtpCode ?? '———'}. Share that code with your courier at handoff.`,
+      link: sellerLink,
       invoiceId: invoice.id,
     });
 
@@ -65,8 +66,8 @@ export class NotificationsService {
       userId: buyer.id,
       type: 'invoice_escrowed',
       title: 'Payment received — held in escrow',
-      message: `Your ₦${amount} payment for ${invoice.invoiceNumber} is held securely. Confirm receipt when ${sellerName} delivers your items.`,
-      link,
+      message: `Your ₦${amount} payment for ${invoice.invoiceNumber} is held securely. When ${sellerName} delivers, enter their delivery OTP and confirm receipt to release funds.`,
+      link: buyerLink,
       invoiceId: invoice.id,
     });
   }
@@ -83,7 +84,7 @@ export class NotificationsService {
       type: 'invoice_released',
       title: 'Funds released',
       message: `${buyerLabel} confirmed receipt. ₦${amount} for ${invoice.invoiceNumber} has been released to you.`,
-      link: `/main/invoices?view=${invoice.id}`,
+      link: `/main/invoices?tab=sent&view=${invoice.id}`,
       invoiceId: invoice.id,
     });
   }
@@ -108,14 +109,15 @@ export class NotificationsService {
     const buyerLabel = invoice.buyerName ?? invoice.buyerEmail;
     const reasonLabel = dispute.reason.replace(/_/g, ' ');
     const adminLink = `/main/admin/disputes?id=${dispute.id}`;
-    const invoiceLink = `/main/invoices?view=${invoice.id}`;
+    const sellerInvoiceLink = `/main/invoices?tab=sent&view=${invoice.id}`;
+    const buyerInvoiceLink = `/main/invoices?tab=received&view=${invoice.id}`;
 
     await this.notificationsRepository.save({
       userId: seller.id,
       type: 'dispute_opened',
       title: 'Dispute opened',
       message: `${buyerLabel} opened a dispute on ${invoice.invoiceNumber} (${reasonLabel}). Please respond within 24 hours. Funds remain locked pending review.`,
-      link: invoiceLink,
+      link: sellerInvoiceLink,
       invoiceId: invoice.id,
     });
 
@@ -126,9 +128,21 @@ export class NotificationsService {
         type: 'dispute_opened',
         title: 'Dispute submitted',
         message: `Your dispute for ${invoice.invoiceNumber} was submitted. The seller has 24 hours to respond. Amana will review within 72 hours and decide within 5 business days.`,
-        link: invoiceLink,
+        link: buyerInvoiceLink,
         invoiceId: invoice.id,
       });
+
+      const verified = await this.usersService.isVerified(buyer.id);
+      if (!verified) {
+        await this.notificationsRepository.save({
+          userId: buyer.id,
+          type: 'verify_for_refund',
+          title: 'Verify your account',
+          message: `Verify your account in Settings so we can refund you if your dispute on ${invoice.invoiceNumber} is resolved in your favour.`,
+          link: '/main/settings',
+          invoiceId: invoice.id,
+        });
+      }
     }
 
     const admins = await this.usersService.listAdmins();
@@ -173,7 +187,7 @@ export class NotificationsService {
     const sellerLink = `/main/invoices?view=${invoice.id}`;
     const messages = {
       resolved_buyer:
-        'The dispute was resolved in your favour. A refund will be processed according to our policy.',
+        'The dispute was resolved in your favour. If your account is verified, the refund is being sent to your Amana account.',
       resolved_seller:
         'The dispute was resolved in the seller\'s favour. Funds have been released.',
       closed:

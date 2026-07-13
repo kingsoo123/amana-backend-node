@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -56,5 +57,10 @@ export class AdminController {
     @Body() dto: AdminResolveDisputeDto,
   ) {
     return this.adminService.resolveDispute(admin, id, dto);
+  }
+
+  @Post('disputes/:id/refund')
+  retryDisputeRefund(@CurrentUser() admin: User, @Param('id') id: string) {
+    return this.adminService.retryDisputeRefund(admin, id);
   }
 }

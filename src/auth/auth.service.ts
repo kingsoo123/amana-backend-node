@@ -159,7 +159,16 @@ export class AuthService {
       jti,
     });
 
-    return { token };
+    return {
+      token,
+      data: {
+        id: user.id,
+        email: user.email,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        role: user.role,
+      },
+    };
   }
 
   async logout(token?: string) {

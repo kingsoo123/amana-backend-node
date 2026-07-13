@@ -28,6 +28,9 @@ export class VirtualAccount {
   @Column({ name: 'bank_name', type: 'varchar' })
   bankName: string;
 
+  @Column({ name: 'bank_code', type: 'varchar', nullable: true })
+  bankCode: string | null;
+
   @Column({ name: 'flw_ref', type: 'varchar', nullable: true })
   flwRef: string | null;
 

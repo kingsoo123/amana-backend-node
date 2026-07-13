@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -14,12 +15,17 @@ import { User } from '../users/user.entity';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 import { UpdatePartnerWebhookDto } from './dto/create-api-key.dto';
 import { CreatePartnerAccessRequestDto } from './dto/create-partner-access-request.dto';
+import type { WebhookDeliveryStatus } from './partner-webhook-delivery.entity';
 import { PartnersService } from './partners.service';
+import { WebhooksService } from './webhooks.service';
 
 @Controller('api/v1/me/partner-access')
 @UseGuards(JwtAuthGuard)
 export class SellerPartnerAccessController {
-  constructor(private readonly partnersService: PartnersService) {}
+  constructor(
+    private readonly partnersService: PartnersService,
+    private readonly webhooksService: WebhooksService,
+  ) {}
 
   @Get()
   getStatus(@CurrentUser() user: User) {
@@ -46,6 +52,42 @@ export class SellerPartnerAccessController {
       );
     }
     return this.partnersService.updateWebhook(access.data.partner.id, dto);
+  }
+
+  @Get('webhook-deliveries')
+  async listWebhookDeliveries(
+    @CurrentUser() user: User,
+    @Query('status') status?: WebhookDeliveryStatus,
+    @Query('limit') limit?: string,
+  ) {
+    const access = await this.partnersService.getSellerPartnerAccess(user);
+    if (!access.data.partner) {
+      throw new BadRequestException(
+        'Partner access has not been approved yet',
+      );
+    }
+    return this.webhooksService.listDeliveries({
+      partnerId: access.data.partner.id,
+      status,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
+  @Post('webhook-deliveries/:deliveryId/retry')
+  async retryWebhookDelivery(
+    @CurrentUser() user: User,
+    @Param('deliveryId') deliveryId: string,
+  ) {
+    const access = await this.partnersService.getSellerPartnerAccess(user);
+    if (!access.data.partner) {
+      throw new BadRequestException(
+        'Partner access has not been approved yet',
+      );
+    }
+    return this.webhooksService.retryDelivery(
+      deliveryId,
+      access.data.partner.id,
+    );
   }
 
   @Post('api-keys')

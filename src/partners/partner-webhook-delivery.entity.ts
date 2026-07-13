@@ -8,7 +8,10 @@ import {
 } from 'typeorm';
 import { Partner } from './partner.entity';
 
-export type WebhookDeliveryStatus = 'pending' | 'delivered' | 'failed';
+export type WebhookDeliveryStatus =
+  | 'pending'
+  | 'delivered'
+  | 'dead_letter';
 
 @Entity('partner_webhook_deliveries')
 export class PartnerWebhookDelivery {
@@ -34,6 +37,7 @@ export class PartnerWebhookDelivery {
   @Column({ type: 'jsonb' })
   payload: Record<string, unknown>;
 
+  /** pending = awaiting/retrying · delivered · dead_letter = exhausted retries */
   @Column({ type: 'varchar', default: 'pending' })
   status: WebhookDeliveryStatus;
 
@@ -45,6 +49,12 @@ export class PartnerWebhookDelivery {
 
   @Column({ name: 'attempt_count', type: 'int', default: 0 })
   attemptCount: number;
+
+  @Column({ name: 'next_attempt_at', type: 'timestamptz', nullable: true })
+  nextAttemptAt: Date | null;
+
+  @Column({ name: 'last_attempt_at', type: 'timestamptz', nullable: true })
+  lastAttemptAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
