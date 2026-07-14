@@ -25,6 +25,8 @@ import {
 } from './dispute-policy';
 import { AdminResolveDisputeDto } from './dto/admin-resolve-dispute.dto';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
+import { CreateDisputeMessageDto } from './dto/create-dispute-message.dto';
+import { DisputeMessage } from './dispute-message.entity';
 
 @Injectable()
 export class DisputesService {
@@ -33,6 +35,8 @@ export class DisputesService {
     private readonly disputesRepository: Repository<Dispute>,
     @InjectRepository(Invoice)
     private readonly invoicesRepository: Repository<Invoice>,
+    @InjectRepository(DisputeMessage)
+    private readonly messagesRepository: Repository<DisputeMessage>,
     private readonly notificationsService: NotificationsService,
     private readonly usersService: UsersService,
     private readonly escrowSettlement: EscrowSettlementService,
@@ -380,6 +384,109 @@ export class DisputesService {
     }
 
     return dispute;
+  }
+
+  async listMessages(user: User, disputeId: string) {
+    const dispute = await this.findDisputeOrThrow(disputeId);
+    this.assertBuyerOrAdminChatAccess(user, dispute);
+
+    const messages = await this.messagesRepository.find({
+      where: { disputeId },
+      relations: { sender: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    return {
+      data: {
+        disputeId: dispute.id,
+        canSend: !this.isTerminal(dispute.status),
+        messages: messages.map((message) => this.toMessageResponse(message)),
+      },
+    };
+  }
+
+  async postMessage(
+    user: User,
+    disputeId: string,
+    dto: CreateDisputeMessageDto,
+  ) {
+    const dispute = await this.findDisputeOrThrow(disputeId);
+    this.assertBuyerOrAdminChatAccess(user, dispute);
+
+    if (this.isTerminal(dispute.status)) {
+      throw new BadRequestException(
+        'This dispute is closed. Messaging is no longer available.',
+      );
+    }
+
+    const body = dto.body.trim();
+    if (!body) {
+      throw new BadRequestException('Message cannot be empty');
+    }
+
+    const message = await this.messagesRepository.save({
+      disputeId: dispute.id,
+      senderUserId: user.id,
+      body,
+    });
+
+    const saved = await this.messagesRepository.findOne({
+      where: { id: message.id },
+      relations: { sender: true },
+    });
+
+    if (dispute.invoice) {
+      await this.notificationsService.notifyDisputeMessage({
+        disputeId: dispute.id,
+        invoice: dispute.invoice,
+        sender: user,
+        preview: body,
+      });
+    }
+
+    return {
+      message: 'Message sent',
+      data: this.toMessageResponse(saved ?? message),
+    };
+  }
+
+  private assertBuyerOrAdminChatAccess(user: User, dispute: Dispute) {
+    if (user.role === 'admin') {
+      return;
+    }
+
+    const isBuyer =
+      dispute.raisedByUserId === user.id ||
+      dispute.invoice?.buyerEmail?.toLowerCase() === user.email.toLowerCase();
+
+    if (!isBuyer) {
+      throw new ForbiddenException(
+        'Only the buyer and Amana ops can use dispute chat',
+      );
+    }
+  }
+
+  private toMessageResponse(message: DisputeMessage) {
+    const sender = message.sender;
+    return {
+      id: message.id,
+      disputeId: message.disputeId,
+      body: message.body,
+      createdAt: message.createdAt,
+      sender: sender
+        ? {
+            id: sender.id,
+            name: `${sender.firstname} ${sender.lastname}`.trim(),
+            email: sender.email,
+            role: sender.role === 'admin' ? 'admin' : 'buyer',
+          }
+        : {
+            id: message.senderUserId,
+            name: 'User',
+            email: '',
+            role: 'buyer' as const,
+          },
+    };
   }
 
   private assertDisputeAccess(user: User, dispute: Dispute) {

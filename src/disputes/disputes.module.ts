@@ -6,12 +6,13 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PartnersModule } from '../partners/partners.module';
 import { UsersModule } from '../users/users.module';
 import { Dispute } from './dispute.entity';
+import { DisputeMessage } from './dispute-message.entity';
 import { DisputesController } from './disputes.controller';
 import { DisputesService } from './disputes.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Dispute, Invoice]),
+    TypeOrmModule.forFeature([Dispute, DisputeMessage, Invoice]),
     NotificationsModule,
     UsersModule,
     EscrowModule,

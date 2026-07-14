@@ -178,6 +178,49 @@ export class NotificationsService {
     return ` Raised near ${dispute.raisedLatitude.toFixed(5)}, ${dispute.raisedLongitude.toFixed(5)}.`;
   }
 
+  async notifyDisputeMessage(input: {
+    disputeId: string;
+    invoice: Invoice;
+    sender: User;
+    preview: string;
+  }) {
+    const { disputeId, invoice, sender, preview } = input;
+    const snippet =
+      preview.length > 120 ? `${preview.slice(0, 117)}…` : preview;
+    const senderIsAdmin = sender.role === 'admin';
+    const buyerLink = `/main/invoices?tab=received&view=${invoice.id}`;
+    const adminLink = `/main/admin/disputes?id=${disputeId}`;
+
+    if (senderIsAdmin) {
+      const buyer = await this.usersService.findByEmail(invoice.buyerEmail);
+      if (buyer) {
+        await this.notificationsRepository.save({
+          userId: buyer.id,
+          type: 'dispute_message',
+          title: 'New message on your dispute',
+          message: `Amana ops replied on ${invoice.invoiceNumber}: ${snippet}`,
+          link: buyerLink,
+          invoiceId: invoice.id,
+        });
+      }
+      return;
+    }
+
+    const admins = await this.usersService.listAdmins();
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsRepository.save({
+          userId: admin.id,
+          type: 'dispute_message',
+          title: 'Buyer dispute message',
+          message: `${invoice.buyerName ?? invoice.buyerEmail} on ${invoice.invoiceNumber}: ${snippet}`,
+          link: adminLink,
+          invoiceId: invoice.id,
+        }),
+      ),
+    );
+  }
+
   async notifyDisputeResolved(
     invoice: Invoice,
     seller: User,

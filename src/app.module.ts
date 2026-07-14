@@ -11,6 +11,7 @@ import { AdminModule } from './admin/admin.module';
 import { CustomersModule } from './customers/customers.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { Dispute } from './disputes/dispute.entity';
+import { DisputeMessage } from './disputes/dispute-message.entity';
 import { DisputesModule } from './disputes/disputes.module';
 import { EscrowModule } from './escrow/escrow.module';
 import { Invoice } from './invoices/invoice.entity';
@@ -36,6 +37,7 @@ const databaseEntities = [
   Invoice,
   Notification,
   Dispute,
+  DisputeMessage,
   Partner,
   PartnerApiKey,
   PartnerWebhookDelivery,
