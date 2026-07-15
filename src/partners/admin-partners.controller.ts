@@ -19,6 +19,7 @@ import {
 } from './dto/create-api-key.dto';
 import { CreatePartnerDto } from './dto/create-partner.dto';
 import { ReviewPartnerAccessRequestDto } from './dto/review-partner-access-request.dto';
+import { UpdatePartnerStatusDto } from './dto/update-partner-status.dto';
 import type { WebhookDeliveryStatus } from './partner-webhook-delivery.entity';
 import { PartnersService } from './partners.service';
 import { WebhooksService } from './webhooks.service';
@@ -96,6 +97,24 @@ export class AdminPartnersController {
         createdAt: partner.createdAt,
       },
     }));
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdatePartnerStatusDto,
+  ) {
+    return this.partnersService.updatePartnerStatus(id, dto.status);
+  }
+
+  @Post(':id/disable')
+  disable(@Param('id') id: string) {
+    return this.partnersService.updatePartnerStatus(id, 'disabled');
+  }
+
+  @Post(':id/enable')
+  enable(@Param('id') id: string) {
+    return this.partnersService.updatePartnerStatus(id, 'active');
   }
 
   @Patch(':id/webhook')

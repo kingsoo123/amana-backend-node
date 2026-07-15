@@ -181,17 +181,17 @@ export class NotificationsService {
   async notifyDisputeMessage(input: {
     disputeId: string;
     invoice: Invoice;
-    sender: User;
+    sender?: User;
+    fromPartnerName?: string;
     preview: string;
   }) {
-    const { disputeId, invoice, sender, preview } = input;
+    const { disputeId, invoice, sender, fromPartnerName, preview } = input;
     const snippet =
       preview.length > 120 ? `${preview.slice(0, 117)}…` : preview;
-    const senderIsAdmin = sender.role === 'admin';
     const buyerLink = `/main/invoices?tab=received&view=${invoice.id}`;
     const adminLink = `/main/admin/disputes?id=${disputeId}`;
 
-    if (senderIsAdmin) {
+    if (sender?.role === 'admin') {
       const buyer = await this.usersService.findByEmail(invoice.buyerEmail);
       if (buyer) {
         await this.notificationsRepository.save({
@@ -207,13 +207,20 @@ export class NotificationsService {
     }
 
     const admins = await this.usersService.listAdmins();
+    const title = fromPartnerName
+      ? 'Partner dispute evidence'
+      : 'Buyer dispute message';
+    const message = fromPartnerName
+      ? `${fromPartnerName} on ${invoice.invoiceNumber}: ${snippet}`
+      : `${invoice.buyerName ?? invoice.buyerEmail} on ${invoice.invoiceNumber}: ${snippet}`;
+
     await Promise.all(
       admins.map((admin) =>
         this.notificationsRepository.save({
           userId: admin.id,
           type: 'dispute_message',
-          title: 'Buyer dispute message',
-          message: `${invoice.buyerName ?? invoice.buyerEmail} on ${invoice.invoiceNumber}: ${snippet}`,
+          title,
+          message,
           link: adminLink,
           invoiceId: invoice.id,
         }),

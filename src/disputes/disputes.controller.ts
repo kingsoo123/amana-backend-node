@@ -11,6 +11,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { CreateDisputeMessageDto } from './dto/create-dispute-message.dto';
+import { SignDisputeUploadDto } from './dto/sign-dispute-upload.dto';
 import { DisputesService } from './disputes.service';
 
 @Controller('api/v1')
@@ -53,5 +54,15 @@ export class DisputesController {
     @Body() dto: CreateDisputeMessageDto,
   ) {
     return this.disputesService.postMessage(user, id, dto);
+  }
+
+  @Post('disputes/:id/uploads/sign')
+  @UseGuards(JwtAuthGuard)
+  signUpload(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: SignDisputeUploadDto,
+  ) {
+    return this.disputesService.signUploadForUser(user, id, dto);
   }
 }

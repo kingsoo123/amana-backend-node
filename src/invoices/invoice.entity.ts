@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -19,6 +20,10 @@ export type InvoiceStatus =
   | 'cancelled';
 
 @Entity('invoices')
+@Index('uq_invoices_partner_external_reference', ['partnerId', 'externalReference'], {
+  unique: true,
+  where: `"partner_id" IS NOT NULL AND "external_reference" IS NOT NULL`,
+})
 export class Invoice {
   @PrimaryGeneratedColumn('uuid')
   id: string;

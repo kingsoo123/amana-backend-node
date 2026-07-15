@@ -52,6 +52,10 @@ export class InvoicesService {
   ) {
     await this.assertVerifiedUser(seller.id);
 
+    if (seller.role !== 'admin' && seller.role !== 'seller') {
+      seller = await this.usersService.promoteToSeller(seller);
+    }
+
     const dva = await this.accountsService.findActiveVirtualAccount(seller.id);
     if (!dva) {
       throw new BadRequestException(
@@ -492,6 +496,8 @@ export class InvoicesService {
     await this.notificationsService.notifyInvoiceEscrowed(invoice, invoice.seller);
     await this.webhooksService?.emitInvoiceEvent('payment.funded', invoice, {
       trueHold: this.escrowSettlement.isTrueHoldEnabled(),
+      deliveryOtp: invoice.deliveryOtpCode,
+      requiresDeliveryOtp: true,
     });
 
     return {
@@ -531,6 +537,14 @@ export class InvoicesService {
 
     invoice.deliveryOtpCode = this.generateDeliveryOtp();
     return true;
+  }
+
+  /** Persist a delivery OTP when escrow/disputed invoices are missing one. */
+  async ensureDeliveryOtpPersisted(invoice: Invoice): Promise<Invoice> {
+    if (await this.ensureDeliveryOtp(invoice)) {
+      return this.invoicesRepository.save(invoice);
+    }
+    return invoice;
   }
 
   private toDeliveryLocation(invoice: Invoice) {
@@ -650,6 +664,8 @@ export class InvoicesService {
           buyerName: invoice.buyerName,
           dueDate: invoice.dueDate,
           paymentReference: invoice.paymentReference,
+          successUrl: invoice.successUrl,
+          cancelUrl: invoice.cancelUrl,
         },
         seller: {
           name: `${seller.firstname} ${seller.lastname}`.trim(),

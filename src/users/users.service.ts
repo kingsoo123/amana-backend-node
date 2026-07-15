@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VirtualAccount } from '../accounts/virtual-account.entity';
@@ -139,6 +139,43 @@ export class UsersService {
   async setRole(userId: string, role: User['role']): Promise<User | null> {
     await this.usersRepository.update({ id: userId }, { role });
     return this.findById(userId);
+  }
+
+  /**
+   * Opt a non-admin account into seller tools (invoices + partner access).
+   * Buyers stay role=user until they enable selling or create an invoice.
+   */
+  async promoteToSeller(user: User): Promise<User> {
+    if (user.role === 'admin') {
+      throw new ForbiddenException(
+        'Admin accounts cannot become sellers. Use a seller account instead.',
+      );
+    }
+
+    if (user.role === 'seller') {
+      return user;
+    }
+
+    await this.usersRepository.update({ id: user.id }, { role: 'seller' });
+    const refreshed = await this.findById(user.id);
+    if (!refreshed) {
+      throw new ForbiddenException('Unable to enable seller access');
+    }
+    return refreshed;
+  }
+
+  assertSellerRole(user: User) {
+    if (user.role === 'admin') {
+      throw new ForbiddenException(
+        'Admins manage partners via /api/v1/admin/partners, not /me/partner-access',
+      );
+    }
+
+    if (user.role !== 'seller') {
+      throw new ForbiddenException(
+        'Seller access required. Enable selling on your account before using partner API tools.',
+      );
+    }
   }
 
   async promoteAdminByEmail(email: string): Promise<void> {

@@ -12,6 +12,7 @@ import {
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { User } from '../users/user.entity';
+import { UsersService } from '../users/users.service';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 import { UpdatePartnerWebhookDto } from './dto/create-api-key.dto';
 import { CreatePartnerAccessRequestDto } from './dto/create-partner-access-request.dto';
@@ -25,6 +26,7 @@ export class SellerPartnerAccessController {
   constructor(
     private readonly partnersService: PartnersService,
     private readonly webhooksService: WebhooksService,
+    private readonly usersService: UsersService,
   ) {}
 
   @Get()
@@ -32,11 +34,17 @@ export class SellerPartnerAccessController {
     return this.partnersService.getSellerPartnerAccess(user);
   }
 
+  @Post('enable-seller')
+  enableSeller(@CurrentUser() user: User) {
+    return this.partnersService.enableSellerTools(user);
+  }
+
   @Post('request')
   submitRequest(
     @CurrentUser() user: User,
     @Body() dto: CreatePartnerAccessRequestDto,
   ) {
+    this.usersService.assertSellerRole(user);
     return this.partnersService.submitAccessRequest(user, dto);
   }
 
@@ -45,6 +53,7 @@ export class SellerPartnerAccessController {
     @CurrentUser() user: User,
     @Body() dto: UpdatePartnerWebhookDto,
   ) {
+    this.usersService.assertSellerRole(user);
     const access = await this.partnersService.getSellerPartnerAccess(user);
     if (!access.data.partner) {
       throw new BadRequestException(
@@ -60,6 +69,7 @@ export class SellerPartnerAccessController {
     @Query('status') status?: WebhookDeliveryStatus,
     @Query('limit') limit?: string,
   ) {
+    this.usersService.assertSellerRole(user);
     const access = await this.partnersService.getSellerPartnerAccess(user);
     if (!access.data.partner) {
       throw new BadRequestException(
@@ -78,6 +88,7 @@ export class SellerPartnerAccessController {
     @CurrentUser() user: User,
     @Param('deliveryId') deliveryId: string,
   ) {
+    this.usersService.assertSellerRole(user);
     const access = await this.partnersService.getSellerPartnerAccess(user);
     if (!access.data.partner) {
       throw new BadRequestException(
@@ -92,6 +103,7 @@ export class SellerPartnerAccessController {
 
   @Post('api-keys')
   async createApiKey(@CurrentUser() user: User, @Body() dto: CreateApiKeyDto) {
+    this.usersService.assertSellerRole(user);
     const access = await this.partnersService.getSellerPartnerAccess(user);
     if (!access.data.partner) {
       throw new BadRequestException(
@@ -103,6 +115,7 @@ export class SellerPartnerAccessController {
 
   @Post('api-keys/:keyId/revoke')
   async revokeApiKey(@CurrentUser() user: User, @Param('keyId') keyId: string) {
+    this.usersService.assertSellerRole(user);
     const access = await this.partnersService.getSellerPartnerAccess(user);
     if (!access.data.partner) {
       throw new BadRequestException(

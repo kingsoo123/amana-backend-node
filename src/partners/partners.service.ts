@@ -18,6 +18,7 @@ import { ReviewPartnerAccessRequestDto } from './dto/review-partner-access-reque
 import { PartnerAccessRequest } from './partner-access-request.entity';
 import { PartnerApiKey } from './partner-api-key.entity';
 import { Partner } from './partner.entity';
+import { Invoice } from '../invoices/invoice.entity';
 
 @Injectable()
 export class PartnersService {
@@ -28,22 +29,38 @@ export class PartnersService {
     private readonly apiKeysRepository: Repository<PartnerApiKey>,
     @InjectRepository(PartnerAccessRequest)
     private readonly accessRequestsRepository: Repository<PartnerAccessRequest>,
+    @InjectRepository(Invoice)
+    private readonly invoicesRepository: Repository<Invoice>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
   ) {}
 
   async createPartner(dto: CreatePartnerDto) {
-    const seller = await this.usersService.findById(dto.sellerId);
+    let seller = await this.usersService.findById(dto.sellerId);
     if (!seller) {
       throw new NotFoundException('Seller user not found');
     }
+    if (seller.role === 'admin') {
+      throw new BadRequestException(
+        'Admin accounts cannot be partner sellers. Use a seller account instead.',
+      );
+    }
+    if (seller.role !== 'seller') {
+      seller = await this.usersService.promoteToSeller(seller);
+    }
 
     const existing = await this.partnersRepository.findOne({
-      where: { sellerId: seller.id, status: 'active' },
+      where: { sellerId: seller.id },
+      order: { createdAt: 'DESC' },
     });
-    if (existing) {
+    if (existing?.status === 'active') {
       throw new BadRequestException(
         'This seller already has an active partner account',
+      );
+    }
+    if (existing?.status === 'disabled') {
+      throw new BadRequestException(
+        'This seller already has a partner account that is disabled. Re-enable it instead of creating another.',
       );
     }
 
@@ -90,10 +107,56 @@ export class PartnersService {
   }
 
   async findPartnerBySellerId(sellerId: string) {
-    return this.partnersRepository.findOne({
+    const active = await this.partnersRepository.findOne({
       where: { sellerId, status: 'active' },
       relations: { seller: true },
     });
+    if (active) {
+      return active;
+    }
+
+    return this.partnersRepository.findOne({
+      where: { sellerId, status: 'disabled' },
+      relations: { seller: true },
+      order: { updatedAt: 'DESC' },
+    });
+  }
+
+  async updatePartnerStatus(partnerId: string, status: 'active' | 'disabled') {
+    const partner = await this.getPartnerOrThrow(partnerId);
+
+    if (partner.status === status) {
+      return {
+        message:
+          status === 'active'
+            ? 'Partner is already active'
+            : 'Partner is already disabled',
+        data: this.toPartnerResponse(partner),
+      };
+    }
+
+    if (status === 'active') {
+      const otherActive = await this.partnersRepository.findOne({
+        where: { sellerId: partner.sellerId, status: 'active' },
+      });
+      if (otherActive && otherActive.id !== partner.id) {
+        throw new BadRequestException(
+          'Another active partner already exists for this seller',
+        );
+      }
+    }
+
+    partner.status = status;
+    await this.partnersRepository.save(partner);
+
+    const refreshed = await this.getPartnerOrThrow(partnerId);
+    return {
+      message:
+        status === 'active'
+          ? 'Partner enabled. API keys can authenticate again.'
+          : 'Partner disabled. API requests will be rejected until re-enabled.',
+      data: this.toPartnerResponse(refreshed),
+    };
   }
 
   async updateWebhook(partnerId: string, dto: UpdatePartnerWebhookDto) {
@@ -113,7 +176,12 @@ export class PartnersService {
   }
 
   async createApiKey(partnerId: string, dto: CreateApiKeyDto) {
-    await this.getPartnerOrThrow(partnerId);
+    const partner = await this.getPartnerOrThrow(partnerId);
+    if (partner.status !== 'active') {
+      throw new BadRequestException(
+        'Cannot create API keys while the partner is disabled. Re-enable it first.',
+      );
+    }
 
     const rawSecret = randomBytes(24).toString('hex');
     const fullKey = `ak_live_${rawSecret}`;
@@ -180,10 +248,31 @@ export class PartnersService {
   }
 
   async getSellerPartnerAccess(seller: User) {
+    if (seller.role === 'admin') {
+      throw new ForbiddenException(
+        'Admins manage partners via /api/v1/admin/partners',
+      );
+    }
+
     const verified = await this.usersService.isVerified(seller.id);
-    const partner = await this.findPartnerBySellerId(seller.id);
+    let actor = seller;
+
+    // Backfill: existing partners / invoice sellers become role=seller.
+    if (actor.role !== 'seller') {
+      const partnerCount = await this.partnersRepository.count({
+        where: { sellerId: actor.id },
+      });
+      const invoiceCount = await this.invoicesRepository.count({
+        where: { sellerId: actor.id },
+      });
+      if (partnerCount > 0 || invoiceCount > 0) {
+        actor = await this.usersService.promoteToSeller(actor);
+      }
+    }
+
+    const partner = await this.findPartnerBySellerId(actor.id);
     const latestRequest = await this.accessRequestsRepository.findOne({
-      where: { sellerId: seller.id },
+      where: { sellerId: actor.id },
       order: { createdAt: 'DESC' },
     });
 
@@ -193,10 +282,19 @@ export class PartnersService {
       apiKeys = (await this.listApiKeys(partner.id)).data;
     }
 
+    const hasPartnerRecord = Boolean(partner);
+    const isSeller = actor.role === 'seller';
+
     return {
       data: {
         verified,
-        canRequest: verified && !partner && latestRequest?.status !== 'pending',
+        isSeller,
+        canBecomeSeller: verified && !isSeller && actor.role === 'user',
+        canRequest:
+          verified &&
+          isSeller &&
+          !hasPartnerRecord &&
+          latestRequest?.status !== 'pending',
         partner: partner ? this.toPartnerResponse(partner) : null,
         apiKeys,
         request: latestRequest
@@ -206,7 +304,34 @@ export class PartnersService {
     };
   }
 
+  async enableSellerTools(user: User) {
+    if (user.role === 'admin') {
+      throw new ForbiddenException(
+        'Admin accounts cannot enable seller tools',
+      );
+    }
+
+    const verified = await this.usersService.isVerified(user.id);
+    if (!verified) {
+      throw new ForbiddenException(
+        'Complete verification and create a virtual account before enabling seller tools',
+      );
+    }
+
+    const seller = await this.usersService.promoteToSeller(user);
+    return {
+      message: 'Seller tools enabled. You can now request partner API access.',
+      data: {
+        id: seller.id,
+        role: seller.role,
+        verified: true,
+      },
+    };
+  }
+
   async submitAccessRequest(seller: User, dto: CreatePartnerAccessRequestDto) {
+    this.usersService.assertSellerRole(seller);
+
     const verified = await this.usersService.isVerified(seller.id);
     if (!verified) {
       throw new ForbiddenException(
@@ -214,9 +339,17 @@ export class PartnersService {
       );
     }
 
-    const existingPartner = await this.findPartnerBySellerId(seller.id);
-    if (existingPartner) {
+    const existingPartner = await this.partnersRepository.findOne({
+      where: { sellerId: seller.id },
+      order: { createdAt: 'DESC' },
+    });
+    if (existingPartner?.status === 'active') {
       throw new BadRequestException('You already have partner API access');
+    }
+    if (existingPartner?.status === 'disabled') {
+      throw new BadRequestException(
+        'Your partner access is disabled. Contact Amana ops to re-enable it.',
+      );
     }
 
     const pending = await this.accessRequestsRepository.findOne({
@@ -358,7 +491,7 @@ export class PartnersService {
   }
 
   async authenticateApiKey(apiKey: string): Promise<Partner | null> {
-    if (!apiKey.startsWith('ak_live_') && !apiKey.startsWith('ak_test_')) {
+    if (!apiKey.startsWith('ak_live_')) {
       return null;
     }
 

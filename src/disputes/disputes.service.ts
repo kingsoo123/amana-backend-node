@@ -26,7 +26,13 @@ import {
 import { AdminResolveDisputeDto } from './dto/admin-resolve-dispute.dto';
 import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { CreateDisputeMessageDto } from './dto/create-dispute-message.dto';
-import { DisputeMessage } from './dispute-message.entity';
+import { Partner } from '../partners/partner.entity';
+import { CloudinaryService } from '../media/cloudinary.service';
+import { SignDisputeUploadDto } from './dto/sign-dispute-upload.dto';
+import {
+  DisputeMessage,
+  DisputeMessageSenderKind,
+} from './dispute-message.entity';
 
 @Injectable()
 export class DisputesService {
@@ -40,6 +46,7 @@ export class DisputesService {
     private readonly notificationsService: NotificationsService,
     private readonly usersService: UsersService,
     private readonly escrowSettlement: EscrowSettlementService,
+    private readonly cloudinaryService: CloudinaryService,
     @Optional()
     @Inject(forwardRef(() => WebhooksService))
     private readonly webhooksService?: WebhooksService,
@@ -389,20 +396,12 @@ export class DisputesService {
   async listMessages(user: User, disputeId: string) {
     const dispute = await this.findDisputeOrThrow(disputeId);
     this.assertBuyerOrAdminChatAccess(user, dispute);
+    return this.listMessagesInternal(dispute);
+  }
 
-    const messages = await this.messagesRepository.find({
-      where: { disputeId },
-      relations: { sender: true },
-      order: { createdAt: 'ASC' },
-    });
-
-    return {
-      data: {
-        disputeId: dispute.id,
-        canSend: !this.isTerminal(dispute.status),
-        messages: messages.map((message) => this.toMessageResponse(message)),
-      },
-    };
+  async listMessagesForPartner(partner: Partner, disputeId: string) {
+    const dispute = await this.findPartnerDisputeOrThrow(partner, disputeId);
+    return this.listMessagesInternal(dispute);
   }
 
   async postMessage(
@@ -413,41 +412,224 @@ export class DisputesService {
     const dispute = await this.findDisputeOrThrow(disputeId);
     this.assertBuyerOrAdminChatAccess(user, dispute);
 
+    const senderKind: DisputeMessageSenderKind =
+      user.role === 'admin' ? 'admin' : 'buyer';
+
+    return this.createMessage({
+      dispute,
+      senderKind,
+      senderUserId: user.id,
+      senderPartnerId: null,
+      dto,
+      notifyAs: { kind: 'user', user },
+    });
+  }
+
+  async postMessageForPartner(
+    partner: Partner,
+    disputeId: string,
+    dto: CreateDisputeMessageDto,
+  ) {
+    const dispute = await this.findPartnerDisputeOrThrow(partner, disputeId);
+    return this.createMessage({
+      dispute,
+      senderKind: 'partner',
+      senderUserId: null,
+      senderPartnerId: partner.id,
+      dto,
+      notifyAs: {
+        kind: 'partner',
+        partnerName: partner.name,
+      },
+    });
+  }
+
+  async signUploadForPartner(
+    partner: Partner,
+    disputeId: string,
+    dto: SignDisputeUploadDto,
+  ) {
+    const dispute = await this.findPartnerDisputeOrThrow(partner, disputeId);
+    if (this.isTerminal(dispute.status)) {
+      throw new BadRequestException(
+        'This dispute is closed. Uploads are no longer available.',
+      );
+    }
+
+    return {
+      data: this.cloudinaryService.signUpload({
+        folder: `amana/disputes/${dispute.id}`,
+        resourceType: dto.resourceType ?? 'auto',
+      }),
+    };
+  }
+
+  async signUploadForUser(
+    user: User,
+    disputeId: string,
+    dto: SignDisputeUploadDto,
+  ) {
+    const dispute = await this.findDisputeOrThrow(disputeId);
+    this.assertBuyerOrAdminChatAccess(user, dispute);
+    if (this.isTerminal(dispute.status)) {
+      throw new BadRequestException(
+        'This dispute is closed. Uploads are no longer available.',
+      );
+    }
+
+    return {
+      data: this.cloudinaryService.signUpload({
+        folder: `amana/disputes/${dispute.id}`,
+        resourceType: dto.resourceType ?? 'auto',
+      }),
+    };
+  }
+
+  private async listMessagesInternal(dispute: Dispute) {
+    const messages = await this.messagesRepository.find({
+      where: { disputeId: dispute.id },
+      relations: { sender: true, senderPartner: true },
+      order: { createdAt: 'ASC' },
+    });
+
+    return {
+      data: {
+        disputeId: dispute.id,
+        canSend: !this.isTerminal(dispute.status),
+        uploadsEnabled: this.cloudinaryService.isConfigured(),
+        messages: messages.map((message) => this.toMessageResponse(message)),
+      },
+    };
+  }
+
+  private async createMessage(input: {
+    dispute: Dispute;
+    senderKind: DisputeMessageSenderKind;
+    senderUserId: string | null;
+    senderPartnerId: string | null;
+    dto: CreateDisputeMessageDto;
+    notifyAs:
+      | { kind: 'user'; user: User }
+      | { kind: 'partner'; partnerName: string };
+  }) {
+    const { dispute, dto } = input;
+
     if (this.isTerminal(dispute.status)) {
       throw new BadRequestException(
         'This dispute is closed. Messaging is no longer available.',
       );
     }
 
-    const body = dto.body.trim();
-    if (!body) {
-      throw new BadRequestException('Message cannot be empty');
+    const body = dto.body?.trim() ?? '';
+    const attachment = dto.attachment
+      ? this.normalizeAttachment(dto.attachment)
+      : null;
+
+    if (!body && !attachment) {
+      throw new BadRequestException(
+        'Provide a message body and/or an evidence attachment',
+      );
+    }
+
+    if (attachment && !this.cloudinaryService.isConfigured()) {
+      throw new BadRequestException(
+        'Evidence uploads are not configured on this environment',
+      );
+    }
+
+    if (
+      attachment &&
+      !this.cloudinaryService.isTrustedDeliveryUrl(attachment.url)
+    ) {
+      throw new BadRequestException(
+        'attachment.url must be a Cloudinary delivery URL from the configured cloud',
+      );
+    }
+
+    if (
+      attachment?.publicId &&
+      !attachment.publicId.startsWith(`amana/disputes/${dispute.id}`)
+    ) {
+      throw new BadRequestException(
+        `attachment.publicId must be under amana/disputes/${dispute.id}`,
+      );
     }
 
     const message = await this.messagesRepository.save({
       disputeId: dispute.id,
-      senderUserId: user.id,
+      senderUserId: input.senderUserId,
+      senderPartnerId: input.senderPartnerId,
+      senderKind: input.senderKind,
       body,
+      attachmentUrl: attachment?.url ?? null,
+      attachmentPublicId: attachment?.publicId ?? null,
+      attachmentResourceType: attachment?.resourceType ?? null,
+      attachmentMimeType: attachment?.mimeType ?? null,
+      attachmentFileName: attachment?.fileName ?? null,
+      attachmentBytes: attachment?.bytes ?? null,
     });
 
     const saved = await this.messagesRepository.findOne({
       where: { id: message.id },
-      relations: { sender: true },
+      relations: { sender: true, senderPartner: true },
     });
 
     if (dispute.invoice) {
-      await this.notificationsService.notifyDisputeMessage({
-        disputeId: dispute.id,
-        invoice: dispute.invoice,
-        sender: user,
-        preview: body,
-      });
+      const preview =
+        body ||
+        attachment?.fileName ||
+        attachment?.publicId ||
+        'Attached evidence';
+
+      if (input.notifyAs.kind === 'user') {
+        await this.notificationsService.notifyDisputeMessage({
+          disputeId: dispute.id,
+          invoice: dispute.invoice,
+          sender: input.notifyAs.user,
+          preview,
+        });
+      } else {
+        await this.notificationsService.notifyDisputeMessage({
+          disputeId: dispute.id,
+          invoice: dispute.invoice,
+          preview,
+          fromPartnerName: input.notifyAs.partnerName,
+        });
+      }
     }
 
     return {
       message: 'Message sent',
       data: this.toMessageResponse(saved ?? message),
     };
+  }
+
+  private normalizeAttachment(attachment: NonNullable<CreateDisputeMessageDto['attachment']>) {
+    return {
+      url: attachment.url.trim(),
+      publicId: attachment.publicId.trim(),
+      resourceType: attachment.resourceType?.trim() || null,
+      mimeType: attachment.mimeType?.trim() || null,
+      fileName: attachment.fileName?.trim() || null,
+      bytes: attachment.bytes ?? null,
+    };
+  }
+
+  private async findPartnerDisputeOrThrow(partner: Partner, disputeId: string) {
+    const dispute = await this.findDisputeOrThrow(disputeId);
+    const invoice = dispute.invoice;
+
+    if (!invoice || invoice.partnerId !== partner.id) {
+      throw new ForbiddenException(
+        'Dispute does not belong to this partner',
+      );
+    }
+
+    if (invoice.sellerId !== partner.sellerId) {
+      throw new ForbiddenException('Dispute seller mismatch');
+    }
+
+    return dispute;
   }
 
   private assertBuyerOrAdminChatAccess(user: User, dispute: Dispute) {
@@ -461,31 +643,70 @@ export class DisputesService {
 
     if (!isBuyer) {
       throw new ForbiddenException(
-        'Only the buyer and Amana ops can use dispute chat',
+        'Only the buyer, partner API, and Amana ops can use dispute chat',
       );
     }
   }
 
   private toMessageResponse(message: DisputeMessage) {
     const sender = message.sender;
+    const partner = message.senderPartner;
+    const role: DisputeMessageSenderKind =
+      message.senderPartnerId || message.senderKind === 'partner'
+        ? 'partner'
+        : sender?.role === 'admin' || message.senderKind === 'admin'
+          ? 'admin'
+          : 'buyer';
+
+    if (role === 'partner' || partner) {
+      return {
+        id: message.id,
+        disputeId: message.disputeId,
+        body: message.body,
+        createdAt: message.createdAt,
+        attachment: this.toAttachmentResponse(message),
+        sender: {
+          id: partner?.id ?? message.senderPartnerId ?? 'partner',
+          name: partner?.name ?? 'Partner',
+          email: '',
+          role: 'partner' as const,
+        },
+      };
+    }
+
     return {
       id: message.id,
       disputeId: message.disputeId,
       body: message.body,
       createdAt: message.createdAt,
+      attachment: this.toAttachmentResponse(message),
       sender: sender
         ? {
             id: sender.id,
             name: `${sender.firstname} ${sender.lastname}`.trim(),
             email: sender.email,
-            role: sender.role === 'admin' ? 'admin' : 'buyer',
+            role: (sender.role === 'admin' ? 'admin' : 'buyer') as
+              | 'admin'
+              | 'buyer',
           }
         : {
-            id: message.senderUserId,
+            id: message.senderUserId ?? 'unknown',
             name: 'User',
             email: '',
             role: 'buyer' as const,
           },
+    };
+  }
+
+  private toAttachmentResponse(message: DisputeMessage) {
+    if (!message.attachmentUrl) return null;
+    return {
+      url: message.attachmentUrl,
+      publicId: message.attachmentPublicId,
+      resourceType: message.attachmentResourceType,
+      mimeType: message.attachmentMimeType,
+      fileName: message.attachmentFileName,
+      bytes: message.attachmentBytes,
     };
   }
 

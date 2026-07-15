@@ -81,6 +81,12 @@ export function toPartnerTransaction(
 ) {
   const mapped = mapInvoiceStatus(invoice.status);
   const checkoutUrl = `${options.frontendBaseUrl.replace(/\/$/, '')}/pay/${invoice.shareToken}`;
+  const requiresDeliveryOtp =
+    invoice.status === 'paid_in_escrow' || invoice.status === 'disputed';
+  const deliveryOtp =
+    requiresDeliveryOtp && invoice.deliveryOtpCode
+      ? invoice.deliveryOtpCode
+      : null;
 
   return {
     id: invoice.id,
@@ -93,8 +99,17 @@ export function toPartnerTransaction(
     description: invoice.description,
     checkoutUrl,
     confirmationUrl: checkoutUrl,
+    successUrl: invoice.successUrl,
+    cancelUrl: invoice.cancelUrl,
     externalReference: invoice.externalReference,
     metadata: invoice.metadata,
+    /** True when POST …/confirm needs deliveryOtp (funds held / disputed). */
+    requiresDeliveryOtp,
+    /**
+     * Active delivery OTP for courier handoff + server-side confirm.
+     * Present only while requiresDeliveryOtp is true. Keep server-side.
+     */
+    deliveryOtp,
     buyer: {
       email: invoice.buyerEmail,
       name: invoice.buyerName,
