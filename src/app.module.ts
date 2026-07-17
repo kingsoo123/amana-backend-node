@@ -25,6 +25,7 @@ import { Partner } from './partners/partner.entity';
 import { PartnersModule } from './partners/partners.module';
 import { PaymentsModule } from './payments/payments.module';
 import { User } from './users/user.entity';
+import { RidersModule } from './users/riders.module';
 import { UsersModule } from './users/users.module';
 import { buildTypeOrmConfig } from './config/database.config';
 
@@ -54,6 +55,7 @@ const databaseEntities = [
         buildTypeOrmConfig(configService, databaseEntities),
     }),
     UsersModule,
+    RidersModule,
     AuthModule,
     AccountsModule,
     InvoicesModule,

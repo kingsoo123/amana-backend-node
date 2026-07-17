@@ -1,7 +1,14 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { VirtualAccount } from '../accounts/virtual-account.entity';
+import { CloudinaryService } from '../media/cloudinary.service';
+import { SaveProfilePhotoDto } from './dto/save-profile-photo.dto';
+import { SignProfilePhotoUploadDto } from './dto/sign-profile-photo-upload.dto';
 import { User } from './user.entity';
 
 const ACTIVE_STATUSES = new Set(['active']);
@@ -13,6 +20,7 @@ export class UsersService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(VirtualAccount)
     private readonly virtualAccountsRepository: Repository<VirtualAccount>,
+    private readonly cloudinaryService: CloudinaryService,
   ) {}
 
   findByEmail(email: string): Promise<User | null> {
@@ -32,6 +40,9 @@ export class UsersService {
         verified: true,
         emailVerified: true,
         role: true,
+        vehicleTypes: true,
+        profilePhotoUrl: true,
+        profilePhotoPublicId: true,
         flutterwaveCustomerId: true,
         createdAt: true,
         updatedAt: true,
@@ -90,8 +101,14 @@ export class UsersService {
     email: string;
     phoneNumber: string;
     passwordHash: string;
+    role?: User['role'];
+    vehicleTypes?: User['vehicleTypes'];
   }): Promise<User> {
-    const user = this.usersRepository.create(data);
+    const user = this.usersRepository.create({
+      ...data,
+      role: data.role ?? 'user',
+      vehicleTypes: data.vehicleTypes ?? null,
+    });
     return this.usersRepository.save(user);
   }
 
@@ -113,7 +130,7 @@ export class UsersService {
     );
   }
 
-  async isVerified(userId: string): Promise<boolean> {
+  async hasActiveVirtualAccount(userId: string): Promise<boolean> {
     const account = await this.virtualAccountsRepository
       .createQueryBuilder('account')
       .where('account.user_id = :userId', { userId })
@@ -123,6 +140,80 @@ export class UsersService {
       .getOne();
 
     return Boolean(account);
+  }
+
+  /**
+   * Sellers/users: active Flutterwave DVA.
+   * Riders: profile photo + active DVA (payout destination).
+   */
+  async isVerified(userId: string): Promise<boolean> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: { id: true, role: true, profilePhotoUrl: true },
+    });
+    if (!user) {
+      return false;
+    }
+
+    const hasDva = await this.hasActiveVirtualAccount(userId);
+    if (!hasDva) {
+      return false;
+    }
+
+    if (user.role === 'rider') {
+      return Boolean(user.profilePhotoUrl?.trim());
+    }
+
+    return true;
+  }
+
+  async syncVerifiedFlag(userId: string): Promise<boolean> {
+    const verified = await this.isVerified(userId);
+    await this.setVerified(userId, verified);
+    return verified;
+  }
+
+  signProfilePhotoUpload(user: User, dto: SignProfilePhotoUploadDto) {
+    return {
+      data: this.cloudinaryService.signUpload({
+        folder: `amana/riders/${user.id}/profile`,
+        resourceType: dto.resourceType ?? 'image',
+      }),
+    };
+  }
+
+  async saveProfilePhoto(user: User, dto: SaveProfilePhotoDto) {
+    const url = dto.url.trim();
+    if (!this.cloudinaryService.isTrustedDeliveryUrl(url)) {
+      throw new BadRequestException('Profile photo URL is not a trusted Cloudinary URL');
+    }
+
+    const expectedFolder = `amana/riders/${user.id}/profile`;
+    if (dto.publicId?.trim() && !dto.publicId.trim().startsWith(expectedFolder)) {
+      throw new BadRequestException('Profile photo public id is invalid for this account');
+    }
+
+    await this.usersRepository.update(
+      { id: user.id },
+      {
+        profilePhotoUrl: url,
+        profilePhotoPublicId: dto.publicId?.trim() || null,
+      },
+    );
+
+    const verified = await this.syncVerifiedFlag(user.id);
+    const refreshed = await this.findById(user.id);
+
+    return {
+      data: {
+        profilePhotoUrl: refreshed?.profilePhotoUrl ?? url,
+        profilePhotoPublicId: refreshed?.profilePhotoPublicId ?? null,
+        verified,
+      },
+      message: verified
+        ? 'Profile photo saved. Your rider account is verified.'
+        : 'Profile photo saved. Complete BVN and DVA to finish verification.',
+    };
   }
 
   listAdmins(): Promise<User[]> {

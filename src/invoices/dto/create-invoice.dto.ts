@@ -1,10 +1,10 @@
 import {
   IsDateString,
   IsEmail,
-  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -30,4 +30,9 @@ export class CreateInvoiceDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  /** Optional nearby online rider to assign for delivery. */
+  @IsOptional()
+  @IsUUID()
+  riderId?: string;
 }

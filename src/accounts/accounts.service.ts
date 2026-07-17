@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { FlutterwaveService } from '../flutterwave/flutterwave.service';
 import { FlutterwaveTransfersService } from '../flutterwave/flutterwave-transfers.service';
+import { CloudinaryService } from '../media/cloudinary.service';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { BvnVerification } from './bvn-verification.entity';
@@ -36,12 +37,16 @@ export class AccountsService {
     private readonly flutterwaveService: FlutterwaveService,
     private readonly flutterwaveTransfers: FlutterwaveTransfersService,
     private readonly usersService: UsersService,
+    private readonly cloudinaryService: CloudinaryService,
     private readonly configService: ConfigService,
   ) {}
 
-  async getAccountStatus(userId: string) {
-    const bvnVerification = await this.findLatestBvnVerification(userId);
-    const virtualAccount = await this.findActiveVirtualAccount(userId);
+  async getAccountStatus(user: User) {
+    const bvnVerification = await this.findLatestBvnVerification(user.id);
+    const virtualAccount = await this.findActiveVirtualAccount(user.id);
+    const hasActiveDva = Boolean(virtualAccount);
+    const hasProfilePhoto = Boolean(user.profilePhotoUrl?.trim());
+    const verified = await this.usersService.isVerified(user.id);
 
     return {
       bvn: bvnVerification
@@ -63,7 +68,12 @@ export class AccountsService {
             accountType: virtualAccount.accountType,
           }
         : null,
-      verified: Boolean(virtualAccount),
+      hasActiveDva,
+      hasProfilePhoto,
+      profilePhotoUrl: user.profilePhotoUrl ?? null,
+      role: user.role,
+      uploadsEnabled: this.cloudinaryService.isConfigured(),
+      verified,
     };
   }
 
@@ -248,13 +258,12 @@ export class AccountsService {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    const verified = ACTIVE_STATUSES.has(
+    const dvaActive = ACTIVE_STATUSES.has(
       flutterwaveAccount.accountStatus.toLowerCase(),
     );
-
-    if (verified) {
-      await this.usersService.setVerified(user.id, true);
-    }
+    const verified = dvaActive
+      ? await this.usersService.syncVerifiedFlag(user.id)
+      : false;
 
     return this.toAccountResponse(virtualAccount, verified);
   }

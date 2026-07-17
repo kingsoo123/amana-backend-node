@@ -10,6 +10,11 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
   logDatabaseTarget(configService);
 
+  const httpAdapter = app.getHttpAdapter().getInstance();
+  if (typeof httpAdapter?.set === 'function') {
+    httpAdapter.set('trust proxy', 1);
+  }
+
   app.enableCors({
     origin: createCorsOriginChecker(configService),
     credentials: true,

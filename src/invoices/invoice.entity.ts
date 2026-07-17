@@ -38,6 +38,14 @@ export class Invoice {
   @JoinColumn({ name: 'seller_id' })
   seller: User;
 
+  /** Optional courier assigned at invoice creation. */
+  @Column({ name: 'assigned_rider_id', type: 'uuid', nullable: true })
+  assignedRiderId: string | null;
+
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'assigned_rider_id' })
+  assignedRider: User | null;
+
   @Column({ name: 'buyer_email', type: 'varchar' })
   buyerEmail: string;
 
@@ -83,6 +91,19 @@ export class Invoice {
   /** Shared with seller/courier for handoff; cleared after buyer confirms. */
   @Column({ name: 'delivery_otp_code', type: 'varchar', length: 6, nullable: true })
   deliveryOtpCode: string | null;
+
+  /** Buyer dropoff pin for live rider tracking (shared from pay page). */
+  @Column({ name: 'buyer_latitude', type: 'double precision', nullable: true })
+  buyerLatitude: number | null;
+
+  @Column({ name: 'buyer_longitude', type: 'double precision', nullable: true })
+  buyerLongitude: number | null;
+
+  @Column({ name: 'buyer_location_accuracy', type: 'double precision', nullable: true })
+  buyerLocationAccuracy: number | null;
+
+  @Column({ name: 'buyer_location_at', type: 'timestamptz', nullable: true })
+  buyerLocationAt: Date | null;
 
   @Column({ name: 'delivery_confirmed_latitude', type: 'double precision', nullable: true })
   deliveryConfirmedLatitude: number | null;

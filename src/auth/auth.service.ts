@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { UsersService } from '../users/users.service';
 import { EmailOtpService } from './email-otp.service';
+import { LoginRateLimitService } from './login-rate-limit.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
@@ -29,6 +30,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly revokedTokensService: RevokedTokensService,
     private readonly emailOtpService: EmailOtpService,
+    private readonly loginRateLimitService: LoginRateLimitService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -54,6 +56,13 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 12);
+    const role = dto.accountType === 'rider' ? 'rider' : 'user';
+
+    if (role === 'rider' && (!dto.vehicleTypes || dto.vehicleTypes.length === 0)) {
+      throw new BadRequestException(
+        'Select at least one vehicle type (bike, car, van, or truck)',
+      );
+    }
 
     const user = await this.usersService.create({
       firstname: dto.firstname.trim(),
@@ -61,14 +70,21 @@ export class AuthService {
       email,
       phoneNumber: dto.phoneNumber,
       passwordHash,
+      role,
+      vehicleTypes: role === 'rider' ? (dto.vehicleTypes ?? null) : null,
     });
 
     await this.emailOtpService.issueForUser(user.id, email);
 
     return {
-      message: 'Account created. Enter the verification code to continue.',
+      message:
+        role === 'rider'
+          ? 'Rider account created. Enter the verification code to continue.'
+          : 'Account created. Enter the verification code to continue.',
       email,
       requiresVerification: true,
+      accountType: role,
+      vehicleTypes: user.vehicleTypes,
     };
   }
 
@@ -125,9 +141,12 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const email = dto.email.trim().toLowerCase();
+    this.loginRateLimitService.assertEmailAllowed(email);
+
     const user = await this.usersService.findByEmailWithPassword(email);
 
     if (!user) {
+      this.loginRateLimitService.recordFailedLogin(email);
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -137,6 +156,7 @@ export class AuthService {
     );
 
     if (!passwordMatches) {
+      this.loginRateLimitService.recordFailedLogin(email);
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -151,6 +171,8 @@ export class AuthService {
 
       await this.usersService.setEmailVerified(user.id, true);
     }
+
+    this.loginRateLimitService.clearEmailAttempts(email);
 
     const jti = randomUUID();
     const token = await this.jwtService.signAsync({
@@ -167,6 +189,7 @@ export class AuthService {
         firstname: user.firstname,
         lastname: user.lastname,
         role: user.role,
+        vehicleTypes: user.vehicleTypes,
       },
     };
   }

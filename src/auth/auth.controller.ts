@@ -1,10 +1,11 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { BearerToken } from './decorators/bearer-token.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { LoginRateLimitGuard } from './guards/login-rate-limit.guard';
 
 @Controller('api/v1/auth')
 export class AuthController {
@@ -26,6 +27,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @UseGuards(LoginRateLimitGuard)
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }

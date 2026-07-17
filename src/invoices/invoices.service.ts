@@ -15,10 +15,12 @@ import { DisputesService } from '../disputes/disputes.service';
 import { EscrowSettlementService } from '../escrow/escrow-settlement.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WebhooksService } from '../partners/webhooks.service';
+import { RidersService } from '../users/riders.service';
 import { User } from '../users/user.entity';
 import { UsersService } from '../users/users.service';
 import { ConfirmReceiptDto } from './dto/confirm-receipt.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
+import { ShareBuyerLocationDto } from './dto/share-buyer-location.dto';
 import { Invoice, InvoiceStatus } from './invoice.entity';
 
 export type CreateInvoiceOptions = {
@@ -36,6 +38,7 @@ export class InvoicesService {
     private readonly invoicesRepository: Repository<Invoice>,
     private readonly accountsService: AccountsService,
     private readonly usersService: UsersService,
+    private readonly ridersService: RidersService,
     private readonly notificationsService: NotificationsService,
     private readonly escrowSettlement: EscrowSettlementService,
     @Inject(forwardRef(() => DisputesService))
@@ -68,6 +71,13 @@ export class InvoicesService {
       throw new BadRequestException('You cannot send an invoice to yourself');
     }
 
+    let assignedRider: User | null = null;
+    if (dto.riderId?.trim()) {
+      assignedRider = await this.ridersService.assertAssignableRider(
+        dto.riderId.trim(),
+      );
+    }
+
     const invoiceNumber = this.generateInvoiceNumber();
     const paymentReference = this.generatePaymentReference();
     const shareToken = randomBytes(24).toString('hex');
@@ -84,12 +94,15 @@ export class InvoicesService {
       paymentReference,
       shareToken,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+      assignedRiderId: assignedRider?.id ?? null,
       partnerId: options?.partnerId ?? null,
       externalReference: options?.externalReference?.trim() || null,
       metadata: options?.metadata ?? null,
       successUrl: options?.successUrl ?? null,
       cancelUrl: options?.cancelUrl ?? null,
     });
+
+    invoice.assignedRider = assignedRider;
 
     const notification =
       await this.notificationsService.notifyInvoiceReceived(invoice, seller);
@@ -124,7 +137,7 @@ export class InvoicesService {
     const invoices = await this.invoicesRepository.find({
       where: { sellerId },
       order: { createdAt: 'DESC' },
-      relations: { seller: true },
+      relations: { seller: true, assignedRider: true },
     });
 
     return {
@@ -179,7 +192,7 @@ export class InvoicesService {
   async getPublicPaymentView(shareToken: string) {
     const invoice = await this.invoicesRepository.findOne({
       where: { shareToken },
-      relations: { seller: true },
+      relations: { seller: true, assignedRider: true },
     });
 
     if (!invoice) {
@@ -222,7 +235,7 @@ export class InvoicesService {
   async initiatePaymentByShareToken(shareToken: string) {
     const invoice = await this.invoicesRepository.findOne({
       where: { shareToken },
-      relations: { seller: true },
+      relations: { seller: true, assignedRider: true },
     });
 
     if (!invoice) {
@@ -230,6 +243,164 @@ export class InvoicesService {
     }
 
     return this.markPaymentInitiated(invoice);
+  }
+
+  /** Public — buyer shares dropoff GPS from the pay link for rider tracking. */
+  async shareBuyerLocation(shareToken: string, dto: ShareBuyerLocationDto) {
+    const invoice = await this.invoicesRepository.findOne({
+      where: { shareToken },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    return this.persistBuyerLocation(invoice, dto);
+  }
+
+  /** Authenticated buyer — share dropoff from the signed-in invoice view. */
+  async shareBuyerLocationForUser(
+    user: User,
+    invoiceId: string,
+    dto: ShareBuyerLocationDto,
+  ) {
+    const invoice = await this.findInvoiceOrThrow(invoiceId);
+    this.assertBuyerAccess(user, invoice);
+    return this.persistBuyerLocation(invoice, dto);
+  }
+
+  /** Seller, buyer, or assigned rider — live distance rider → buyer dropoff. */
+  async getDeliveryTracking(user: User, invoiceId: string) {
+    const invoice = await this.findInvoiceOrThrow(invoiceId);
+    this.assertInvoiceAccess(user, invoice);
+
+    const rider = invoice.assignedRiderId
+      ? await this.usersService.findById(invoice.assignedRiderId)
+      : null;
+
+    const riderPoint =
+      rider?.lastLatitude != null &&
+      rider?.lastLongitude != null &&
+      Number.isFinite(rider.lastLatitude) &&
+      Number.isFinite(rider.lastLongitude)
+        ? {
+            latitude: rider.lastLatitude,
+            longitude: rider.lastLongitude,
+            updatedAt: rider.lastLocationAt ?? null,
+          }
+        : null;
+
+    const buyerPoint =
+      invoice.buyerLatitude != null &&
+      invoice.buyerLongitude != null &&
+      Number.isFinite(invoice.buyerLatitude) &&
+      Number.isFinite(invoice.buyerLongitude)
+        ? {
+            latitude: invoice.buyerLatitude,
+            longitude: invoice.buyerLongitude,
+            updatedAt: invoice.buyerLocationAt ?? null,
+          }
+        : null;
+
+    let distanceKm: number | null = null;
+    let etaMinutes: number | null = null;
+
+    if (riderPoint && buyerPoint) {
+      distanceKm = Number(
+        this.haversineKm(
+          riderPoint.latitude,
+          riderPoint.longitude,
+          buyerPoint.latitude,
+          buyerPoint.longitude,
+        ).toFixed(2),
+      );
+      etaMinutes = this.estimateEtaMinutes(
+        distanceKm,
+        rider?.vehicleTypes ?? [],
+      );
+    }
+
+    return {
+      data: {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        hasBuyerLocation: Boolean(buyerPoint),
+        hasRiderLocation: Boolean(riderPoint),
+        rider: riderPoint,
+        buyer: buyerPoint,
+        distanceKm,
+        etaMinutes,
+        assignedRider: this.ridersService.toRiderSummary(rider ?? undefined),
+      },
+    };
+  }
+
+  private async persistBuyerLocation(
+    invoice: Invoice,
+    dto: ShareBuyerLocationDto,
+  ) {
+    if (invoice.status === 'cancelled') {
+      throw new BadRequestException('This invoice has been cancelled');
+    }
+
+    if (invoice.status === 'released' || invoice.status === 'paid') {
+      throw new BadRequestException(
+        'This delivery is complete — location can no longer be updated',
+      );
+    }
+
+    const latitude = Number(dto.latitude.toFixed(6));
+    const longitude = Number(dto.longitude.toFixed(6));
+
+    invoice.buyerLatitude = latitude;
+    invoice.buyerLongitude = longitude;
+    invoice.buyerLocationAccuracy =
+      dto.locationAccuracy != null && Number.isFinite(dto.locationAccuracy)
+        ? dto.locationAccuracy
+        : null;
+    invoice.buyerLocationAt = new Date();
+    await this.invoicesRepository.save(invoice);
+
+    return {
+      data: {
+        shared: true,
+        hasBuyerLocation: true,
+        sharedAt: invoice.buyerLocationAt,
+      },
+      message: 'Delivery location shared for rider tracking',
+    };
+  }
+
+  private haversineKm(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private estimateEtaMinutes(
+    distanceKm: number,
+    vehicleTypes: Array<'bike' | 'car' | 'truck' | 'van'>,
+  ): number {
+    const speedsKmh: Record<'bike' | 'car' | 'truck' | 'van', number> = {
+      bike: 22,
+      car: 28,
+      van: 24,
+      truck: 18,
+    };
+    const speed =
+      vehicleTypes.length > 0
+        ? Math.max(...vehicleTypes.map((type) => speedsKmh[type] ?? 22))
+        : 22;
+    return Math.max(1, Math.ceil((distanceKm / speed) * 60));
   }
 
   async confirmReceipt(
@@ -417,7 +588,7 @@ export class InvoicesService {
   private async findInvoiceOrThrow(invoiceId: string): Promise<Invoice> {
     const invoice = await this.invoicesRepository.findOne({
       where: { id: invoiceId },
-      relations: { seller: true },
+      relations: { seller: true, assignedRider: true },
     });
 
     if (!invoice) {
@@ -431,8 +602,10 @@ export class InvoicesService {
     const isSeller = invoice.sellerId === user.id;
     const isBuyer =
       invoice.buyerEmail.toLowerCase() === user.email.toLowerCase();
+    const isAssignedRider =
+      Boolean(invoice.assignedRiderId) && invoice.assignedRiderId === user.id;
 
-    if (!isSeller && !isBuyer) {
+    if (!isSeller && !isBuyer && !isAssignedRider) {
       throw new ForbiddenException('You do not have access to this invoice');
     }
   }
@@ -453,7 +626,7 @@ export class InvoicesService {
     const paymentReference = input.paymentReference.trim().toUpperCase();
     const invoice = await this.invoicesRepository.findOne({
       where: { paymentReference },
-      relations: { seller: true },
+      relations: { seller: true, assignedRider: true },
     });
 
     if (!invoice) {
@@ -592,6 +765,9 @@ export class InvoicesService {
       paymentReference: invoice.paymentReference,
       shareToken: invoice.shareToken,
       createdAt: invoice.createdAt,
+      assignedRider: this.ridersService.toRiderSummary(
+        invoice.assignedRider ?? undefined,
+      ),
       seller: seller
         ? {
             name: `${seller.firstname} ${seller.lastname}`.trim(),
@@ -625,6 +801,8 @@ export class InvoicesService {
           invoice.status === 'paid_in_escrow' && Boolean(invoice.deliveryOtpCode),
         deliveryOtpCode: showDeliveryOtp ? invoice.deliveryOtpCode : null,
         deliveryProof: this.toDeliveryProof(invoice),
+        hasBuyerLocation:
+          invoice.buyerLatitude != null && invoice.buyerLongitude != null,
         seller: {
           name: `${seller.firstname} ${seller.lastname}`.trim(),
           email: seller.email,
@@ -666,6 +844,8 @@ export class InvoicesService {
           paymentReference: invoice.paymentReference,
           successUrl: invoice.successUrl,
           cancelUrl: invoice.cancelUrl,
+          hasBuyerLocation:
+            invoice.buyerLatitude != null && invoice.buyerLongitude != null,
         },
         seller: {
           name: `${seller.firstname} ${seller.lastname}`.trim(),

@@ -5,6 +5,7 @@ import { DisputesModule } from '../disputes/disputes.module';
 import { EscrowModule } from '../escrow/escrow.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PartnersModule } from '../partners/partners.module';
+import { RidersModule } from '../users/riders.module';
 import { UsersModule } from '../users/users.module';
 import { Invoice } from './invoice.entity';
 import { InvoicesController } from './invoices.controller';
@@ -15,6 +16,7 @@ import { InvoicesService } from './invoices.service';
     TypeOrmModule.forFeature([Invoice]),
     AccountsModule,
     UsersModule,
+    RidersModule,
     NotificationsModule,
     EscrowModule,
     forwardRef(() => DisputesModule),

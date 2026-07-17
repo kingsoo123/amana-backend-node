@@ -21,7 +21,7 @@ export class AccountsController {
   @Get('api/v1/account/status')
   @UseGuards(JwtAuthGuard)
   getAccountStatus(@CurrentUser() user: User) {
-    return this.accountsService.getAccountStatus(user.id);
+    return this.accountsService.getAccountStatus(user);
   }
 
   @Post('api/v1/bvn/initiate')

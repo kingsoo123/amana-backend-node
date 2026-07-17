@@ -12,6 +12,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/user.entity';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { ConfirmReceiptDto } from './dto/confirm-receipt.dto';
+import { ShareBuyerLocationDto } from './dto/share-buyer-location.dto';
 import { InvoicesService } from './invoices.service';
 
 @Controller('api/v1/invoices')
@@ -52,10 +53,34 @@ export class InvoicesController {
     return this.invoicesService.initiatePaymentByShareToken(shareToken);
   }
 
+  @Post('public/:shareToken/buyer-location')
+  shareBuyerLocation(
+    @Param('shareToken') shareToken: string,
+    @Body() dto: ShareBuyerLocationDto,
+  ) {
+    return this.invoicesService.shareBuyerLocation(shareToken, dto);
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   getOne(@CurrentUser() user: User, @Param('id') id: string) {
     return this.invoicesService.getInvoiceForUser(user, id);
+  }
+
+  @Get(':id/tracking')
+  @UseGuards(JwtAuthGuard)
+  getTracking(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.invoicesService.getDeliveryTracking(user, id);
+  }
+
+  @Post(':id/buyer-location')
+  @UseGuards(JwtAuthGuard)
+  shareBuyerLocationAuthenticated(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Body() dto: ShareBuyerLocationDto,
+  ) {
+    return this.invoicesService.shareBuyerLocationForUser(user, id, dto);
   }
 
   @Post(':id/initiate-payment')

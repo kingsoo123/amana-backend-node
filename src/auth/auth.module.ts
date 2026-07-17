@@ -12,6 +12,8 @@ import { RevokedToken } from './revoked-token.entity';
 import { RevokedTokensService } from './revoked-tokens.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RolesGuard } from './guards/roles.guard';
+import { LoginRateLimitGuard } from './guards/login-rate-limit.guard';
+import { LoginRateLimitService } from './login-rate-limit.service';
 
 @Module({
   imports: [
@@ -30,7 +32,15 @@ import { RolesGuard } from './guards/roles.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, EmailOtpService, RevokedTokensService, JwtStrategy, RolesGuard],
+  providers: [
+    AuthService,
+    EmailOtpService,
+    RevokedTokensService,
+    JwtStrategy,
+    RolesGuard,
+    LoginRateLimitService,
+    LoginRateLimitGuard,
+  ],
   exports: [JwtModule, RolesGuard],
 })
 export class AuthModule {}

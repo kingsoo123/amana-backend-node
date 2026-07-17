@@ -40,11 +40,18 @@ export class UsersController {
 
     return {
       data: {
+        id: user.id,
         firstname: user.firstname,
         lastname: user.lastname,
         email: user.email,
+        phoneNumber: user.phoneNumber,
         verified,
         role: user.role,
+        vehicleTypes: user.vehicleTypes ?? null,
+        profilePhotoUrl: user.profilePhotoUrl ?? null,
+        isOnline: user.isOnline ?? false,
+        isEngaged: user.isEngaged ?? false,
+        engagedInvoiceId: user.engagedInvoiceId ?? null,
       },
     };
   }
