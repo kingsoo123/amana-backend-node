@@ -13,6 +13,7 @@ export type NotificationType =
   | 'invoice_paid'
   | 'invoice_escrowed'
   | 'invoice_released'
+  | 'invoice_cancelled'
   | 'dispute_opened'
   | 'dispute_resolved'
   | 'dispute_message'

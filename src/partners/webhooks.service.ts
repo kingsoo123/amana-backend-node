@@ -20,6 +20,7 @@ export type PartnerWebhookEventType =
   | 'transaction.created'
   | 'payment.initiated'
   | 'payment.funded'
+  | 'transaction.cancelled'
   | 'receiver.confirmed'
   | 'escrow.released'
   | 'dispute.opened'

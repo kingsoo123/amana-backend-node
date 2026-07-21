@@ -189,6 +189,60 @@ export class InvoicesService {
     };
   }
 
+  /** Seller may cancel before funds are held in escrow. */
+  async cancelInvoice(user: User, invoiceId: string) {
+    const invoice = await this.findInvoiceOrThrow(invoiceId);
+    this.assertInvoiceAccess(user, invoice);
+
+    const isSeller = invoice.sellerId === user.id;
+    if (!isSeller) {
+      throw new ForbiddenException('Only the seller who created this invoice can cancel it');
+    }
+
+    if (invoice.status === 'cancelled') {
+      throw new BadRequestException('This invoice is already cancelled');
+    }
+
+    if (invoice.status !== 'pending' && invoice.status !== 'payment_initiated') {
+      throw new BadRequestException(
+        'Only unpaid invoices can be cancelled. After payment is held in escrow, use confirm receipt or open a dispute.',
+      );
+    }
+
+    invoice.status = 'cancelled';
+    invoice.deliveryOtpCode = null;
+    await this.invoicesRepository.save(invoice);
+    await this.ridersService.clearEngagementForInvoice(invoice.id);
+
+    const seller =
+      invoice.seller ?? (await this.usersService.findById(invoice.sellerId));
+    if (!seller) {
+      throw new NotFoundException('Seller not found');
+    }
+
+    await this.notificationsService.notifyInvoiceCancelled(
+      invoice,
+      seller,
+      'seller',
+    );
+
+    await this.webhooksService?.emitInvoiceEvent(
+      'transaction.cancelled',
+      invoice,
+      { cancelledBy: 'seller' },
+    );
+
+    const paymentAccount =
+      await this.escrowSettlement.getPaymentAccountForInvoice(invoice);
+
+    return {
+      message: 'Invoice cancelled',
+      data: this.toInvoiceResponse(invoice, seller, paymentAccount, {
+        viewerRole: 'seller',
+      }).data,
+    };
+  }
+
   async getPublicPaymentView(shareToken: string) {
     const invoice = await this.invoicesRepository.findOne({
       where: { shareToken },

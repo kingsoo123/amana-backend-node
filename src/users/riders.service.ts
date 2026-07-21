@@ -323,6 +323,14 @@ export class RidersService {
     return rider;
   }
 
+  /** Clear engagement when an invoice is cancelled or otherwise closed. */
+  async clearEngagementForInvoice(invoiceId: string) {
+    await this.usersRepository.update(
+      { engagedInvoiceId: invoiceId },
+      { isEngaged: false, engagedInvoiceId: null },
+    );
+  }
+
   toRiderSummary(rider: User | null | undefined) {
     if (!rider) return null;
     return {

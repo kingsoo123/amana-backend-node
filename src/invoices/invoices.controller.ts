@@ -67,6 +67,12 @@ export class InvoicesController {
     return this.invoicesService.getInvoiceForUser(user, id);
   }
 
+  @Post(':id/cancel')
+  @UseGuards(JwtAuthGuard)
+  cancel(@CurrentUser() user: User, @Param('id') id: string) {
+    return this.invoicesService.cancelInvoice(user, id);
+  }
+
   @Get(':id/tracking')
   @UseGuards(JwtAuthGuard)
   getTracking(@CurrentUser() user: User, @Param('id') id: string) {

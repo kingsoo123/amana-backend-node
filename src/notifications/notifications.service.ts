@@ -282,6 +282,45 @@ export class NotificationsService {
     });
   }
 
+  async notifyInvoiceCancelled(
+    invoice: Invoice,
+    seller: User,
+    cancelledBy: 'seller' | 'buyer',
+  ) {
+    const amount = Number(invoice.amount).toLocaleString('en-NG', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+    const sellerName = `${seller.firstname} ${seller.lastname}`.trim();
+    const buyer = await this.usersService.findByEmail(invoice.buyerEmail);
+    const sellerLink = `/main/invoices?tab=sent&view=${invoice.id}`;
+    const buyerLink = `/main/invoices?tab=received&view=${invoice.id}`;
+
+    if (cancelledBy === 'seller' && buyer) {
+      return this.notificationsRepository.save({
+        userId: buyer.id,
+        type: 'invoice_cancelled',
+        title: 'Invoice cancelled',
+        message: `${sellerName} cancelled invoice ${invoice.invoiceNumber} (₦${amount}).`,
+        link: buyerLink,
+        invoiceId: invoice.id,
+      });
+    }
+
+    if (cancelledBy === 'buyer') {
+      return this.notificationsRepository.save({
+        userId: seller.id,
+        type: 'invoice_cancelled',
+        title: 'Invoice cancelled',
+        message: `${invoice.buyerName ?? invoice.buyerEmail} cancelled invoice ${invoice.invoiceNumber} (₦${amount}).`,
+        link: sellerLink,
+        invoiceId: invoice.id,
+      });
+    }
+
+    return null;
+  }
+
   async notifyPartnerAccessRequested(
     request: { id: string; businessName: string },
     seller: User,
